@@ -1,0 +1,21 @@
+# Database Schema
+Entities:
+	User
+		joined_at date
+		left_at date
+		banned_at date
+		admin bool
+
+	Event
+		id int
+		scheduled_at date
+		duration int
+		started_at date
+		ended_at date
+		coins int
+
+	EventParticipants
+		event_id int
+		user_id int
+		coins int
+		claimed_at date
