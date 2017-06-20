@@ -6,11 +6,14 @@ import (
 	"os"
 
 	"gopkg.in/telegram-bot-api.v4"
+
+	"db"
 )
 
 type SkyAwayConfig struct {
 	Token string `json:"token"`
 	ChatID int64 `json:"chat_id"`
+	Database db.Config `json:"database"`
 }
 
 func loadJsonFromFile(filename string, result interface{}) error {
@@ -41,6 +44,18 @@ func loadConfig(filename string) *SkyAwayConfig {
 var config = loadConfig("config.json")
 
 func main() {
+	db.Init(&config.Database)
+
+//	var users []db.User
+//	sess := db.GetSession()
+//	num, err := sess.Select("*").From("botuser").LoadStructs(&users)
+//	if err != nil {
+//		panic(err)
+//	}
+//
+//	log.Printf("%d users: %#v", num, users)
+//	return
+
 	bot, err := tgbotapi.NewBotAPI(config.Token)
 	if err != nil {
 		log.Panic(err)

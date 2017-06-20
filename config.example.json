@@ -1,4 +1,8 @@
 {
 	"token": "123:AAaaaSSsssDDddd",
-	"chat_id": -2250
+	"chat_id": -2250,
+	"database": {
+		"driver": "postgres",
+		"source": "dbname=skyaway user=skyaway"
+	}
 }

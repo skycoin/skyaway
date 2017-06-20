@@ -1,6 +1,7 @@
 # Database Schema
 Entities:
 	User
+		id int
 		joined_at date
 		left_at date
 		banned_at date
@@ -8,8 +9,8 @@ Entities:
 
 	Event
 		id int
-		scheduled_at date
 		duration int
+		scheduled_at date
 		started_at date
 		ended_at date
 		coins int
