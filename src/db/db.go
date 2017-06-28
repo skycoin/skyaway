@@ -82,6 +82,53 @@ func GetUser(id int) *User {
 	return &user
 }
 
+func GetUserByName(name string) *User {
+	var user User
+	sess := GetSession()
+	err := sess.Select("*").From("botuser").Where("username = ?", name).LoadStruct(&user)
+
+	if err == dbr.ErrNotFound {
+		return nil
+	}
+
+	if err != nil {
+		return nil
+	}
+
+	user.exists = true
+	return &user
+}
+
+func GetUsers(banned bool) ([]User, error) {
+	sess := GetSession()
+
+	all := sess.Select("*").From("botuser")
+	filtered := all.Where("banned = ?", banned)
+	ordered := filtered.OrderBy("username")
+	var users []User
+	_, err := ordered.LoadStructs(&users)
+
+	if err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+func GetUserCount(banned bool) (int, error) {
+	sess := GetSession()
+
+	query := sess.Select("count(*)").From("botuser").Where("banned = ?", banned)
+	var count int
+	err := query.LoadValue(&count)
+
+	if err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
 //func inThePast(t dbr.NullTime) bool {
 //	return t.Valid && t.Time.Before(time.Now())
 //}

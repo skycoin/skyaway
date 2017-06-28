@@ -7,6 +7,7 @@ import (
 	"time"
 	"strconv"
 	"os"
+	"strings"
 
 	"gopkg.in/telegram-bot-api.v4"
 
@@ -92,6 +93,77 @@ func (ctx *Context) OnSetEventDuration(dur time.Duration) error {
 	return ctx.Reply(fmt.Sprintf("new event duration: %s", config.EventDuration))
 }
 
+func (ctx *Context) OnUserCount(banned bool) error {
+	count, err := db.GetUserCount(banned)
+
+	if err != nil {
+		log.Printf("failed to get user count from db: %v", err)
+		return err
+	}
+
+	return ctx.Reply(strconv.Itoa(count))
+}
+
+func (ctx *Context) OnUsers(banned bool) error {
+	users, err := db.GetUsers(banned)
+
+	if err != nil {
+		log.Printf("failed to get users from db: %v", err)
+		return err
+	}
+
+	var lines []string
+	for i, user := range users {
+		lines = append(lines, fmt.Sprintf(
+			"%d. %d: %s", i, user.ID, user.NameAndTags(),
+		))
+	}
+	if len(lines) > 0 {
+		return ctx.Reply(strings.Join(lines, "\n"))
+	} else {
+		return ctx.Reply("no users in the list")
+	}
+}
+
+func (ctx *Context) OnAddUser(name string) error {
+	user := db.GetUserByName(name)
+	if user == nil {
+		return ctx.Reply("no user by that name")
+	}
+	var actions []string
+	if user.Banned {
+		user.Banned = false
+		actions = append(actions, "unbanned")
+	}
+	if !user.Enlisted {
+		user.Enlisted = true
+		actions = append(actions, "enlisted")
+	}
+	if len(actions) > 0 {
+		if err := user.Put(); err != nil {
+			log.Printf("failed to save the user to db: %v", err)
+			return err
+		}
+		return ctx.Reply(strings.Join(actions, ", "))
+	}
+	return ctx.Reply("no action required")
+}
+
+func (ctx *Context) OnSetBanned(name string, banned bool) error {
+	user := db.GetUserByName(name)
+	if user == nil {
+		return ctx.Reply("no user by that name")
+	}
+	if user.Banned != banned {
+		user.Banned = banned
+		if err := user.Put(); err != nil {
+			log.Printf("failed to save the user to db: %v", err)
+			return err
+		}
+	}
+	return ctx.Reply(user.NameAndTags())
+}
+
 func (ctx *Context) OnSettings() error {
 	chat, err := ctx.Bot.GetChat(tgbotapi.ChatConfig{config.ChatID, ""})
 	if err != nil {
@@ -140,6 +212,16 @@ func (ctx *Context) OnCommand(command string, args string) error {
 			}
 
 			return ctx.OnSetEventDuration(dur)
+		case "usercount":
+			return ctx.OnUserCount(false)
+		case "users":
+			return ctx.OnUsers(false)
+		case "bannedusers":
+			return ctx.OnUsers(true)
+		case "adduser":
+			return ctx.OnAddUser(args)
+		case "banuser":
+			return ctx.OnSetBanned(args, true)
 		default:
 			log.Printf("command not found: %s", command)
 	}
@@ -188,6 +270,28 @@ func (ctx *Context) OnUserLeft(user *tgbotapi.User) error {
 	return nil
 }
 
+func (ctx *Context) OnUserActivity(u *tgbotapi.User) error {
+	if u.ID == ctx.Bot.Self.ID {
+		return nil
+	}
+	dbuser := db.GetUser(u.ID)
+	if dbuser == nil {
+		dbuser = &db.User{
+			ID: u.ID,
+			UserName: u.UserName,
+			FirstName: u.FirstName,
+			LastName: u.LastName,
+		}
+		if err := dbuser.Put(); err != nil {
+			log.Printf("failed to save the user")
+			return err
+		}
+
+		log.Printf("activity from untracked user: %s", dbuser.NameAndTags())
+	}
+	return nil
+}
+
 func (ctx *Context) OnGroupMessage() error {
 	var gerr error
 	if u := ctx.Message.NewChatMember; u != nil {
@@ -197,6 +301,11 @@ func (ctx *Context) OnGroupMessage() error {
 	}
 	if u := ctx.Message.LeftChatMember; u != nil {
 		if err := ctx.OnUserLeft(u); err != nil {
+			gerr = err
+		}
+	}
+	if u := ctx.Message.From; u != nil {
+		if err := ctx.OnUserActivity(u); u != nil {
 			gerr = err
 		}
 	}
