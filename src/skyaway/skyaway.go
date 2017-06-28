@@ -3,6 +3,9 @@ package main
 import (
 	"encoding/json"
 	"log"
+	"fmt"
+	"time"
+	"strconv"
 	"os"
 
 	"gopkg.in/telegram-bot-api.v4"
@@ -49,14 +52,156 @@ type Context struct {
 	Message *tgbotapi.Message
 }
 
+func (ctx *Context) OnStart() error {
+	helpCommand := "/help"
+	if !ctx.Message.Chat.IsPrivate() {
+		helpCommand += "@" + ctx.Bot.Self.UserName
+	}
+	return ctx.Reply(fmt.Sprintf(
+		`Hey, this is a skycoin giveaway bot!
+Type %s for details.`,
+		helpCommand,
+	))
+}
+
+func (ctx *Context) OnHelp() error {
+	return ctx.Reply(`
+/start
+/help - this text
+/settings
+
+/seteventduration [hours] - set duration of event (how long users have to claim coins)
+/scheduleevent [coins] [ISO timestamp, or human readable] [surprise] - start an event at timestamp
+/cancelevent - cancel a scheduled event
+/stopevent - stop current event
+/startevent [number of coins] - start an event immediately
+/adduser [username] - force add user to eligible list
+/banuser [username] - blacklist user from eligible list
+/announce [msg] - send announcement
+/announceevent - force send current scheduled or ongoing event announcement
+/usercount - return number of users
+/users - return all users in list
+/bannedusers - return all users in banned list`)
+}
+
+func (ctx *Context) OnSetEventDuration(dur time.Duration) error {
+	if dur <= 0 {
+		return ctx.Reply("event duration has to be positive")
+	}
+	config.EventDuration = Duration{dur}
+	return ctx.Reply(fmt.Sprintf("new event duration: %s", config.EventDuration))
+}
+
+func (ctx *Context) OnSettings() error {
+	chat, err := ctx.Bot.GetChat(tgbotapi.ChatConfig{config.ChatID, ""})
+	if err != nil {
+		log.Printf("failed to get chat info: %v", err)
+		return err
+	}
+
+	settings := map[string]interface{}{
+		"event_duration": config.EventDuration,
+		"bot": map[string]interface{}{
+			"id": ctx.Bot.Self.ID,
+			"name": ctx.Bot.Self.UserName,
+		},
+		"chat": map[string]interface{}{
+			"id": chat.ID,
+			"type": chat.Type,
+			"title": chat.Title,
+		},
+	}
+	encoded, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		log.Printf("failed to encode current settings into json: %v", err)
+		return err
+	}
+	return ctx.Reply(fmt.Sprintf("current settings: %s", string(encoded)))
+}
+
+func (ctx *Context) OnCommand(command string, args string) error {
+	switch command {
+		case "help":
+			return ctx.OnHelp()
+		case "start":
+			return ctx.OnStart()
+		case "settings":
+			return ctx.OnSettings()
+		case "seteventduration":
+			hours, err := strconv.ParseFloat(args, 64)
+			if err == nil {
+				return ctx.OnSetEventDuration(time.Second * time.Duration(hours * 3600))
+			}
+
+			dur, err := time.ParseDuration(args)
+			if err != nil {
+				ctx.Reply("malformed duration format: use something like 1.5, 1.5h, or 1h30m")
+				return nil
+			}
+
+			return ctx.OnSetEventDuration(dur)
+		default:
+			log.Printf("command not found: %s", command)
+	}
+	return nil
+}
+
 func (ctx *Context) OnPrivateMessage() error {
-	log.Printf("private message from %s: %s", ctx.Message.From.UserName, ctx.Message.Text)
+	//log.Printf("private message from %s: %s", ctx.Message.From.UserName, ctx.Message.Text)
+	if ctx.Message.IsCommand() {
+		return ctx.OnCommand(ctx.Message.Command(), ctx.Message.CommandArguments())
+	}
+	return nil
+}
+
+func (ctx *Context) OnUserJoin(user *tgbotapi.User) error {
+	dbuser := db.GetUser(user.ID)
+	if dbuser == nil {
+		dbuser = &db.User{
+			ID: user.ID,
+			UserName: user.UserName,
+			FirstName: user.FirstName,
+			LastName: user.LastName,
+		}
+	}
+	dbuser.Enlisted = true
+	if err := dbuser.Put(); err != nil {
+		log.Printf("failed to save the user")
+		return err
+	}
+
+	log.Printf("user joined: %s", dbuser.NameAndTags())
+	return nil
+}
+
+func (ctx *Context) OnUserLeft(user *tgbotapi.User) error {
+	dbuser := db.GetUser(user.ID)
+	if dbuser != nil {
+		dbuser.Enlisted = false
+		if err := dbuser.Put(); err != nil {
+			log.Printf("failed to save the user")
+			return err
+		}
+
+		log.Printf("user left: %s", dbuser.NameAndTags())
+	}
 	return nil
 }
 
 func (ctx *Context) OnGroupMessage() error {
-	log.Printf("group message from %s: %s", ctx.Message.From.UserName, ctx.Message.Text)
-	return nil
+	var gerr error
+	if u := ctx.Message.NewChatMember; u != nil {
+		if err := ctx.OnUserJoin(u); err != nil {
+			gerr = err
+		}
+	}
+	if u := ctx.Message.LeftChatMember; u != nil {
+		if err := ctx.OnUserLeft(u); err != nil {
+			gerr = err
+		}
+	}
+	//log.Printf("group message from %s: %s", ctx.Message.From.UserName, ctx.Message.Text)
+	return gerr
 }
 
 func (ctx *Context) Yell(text string) error {
@@ -73,6 +218,7 @@ func (ctx *Context) Whisper(text string) error {
 
 func (ctx *Context) Reply(text string) error {
 	msg := tgbotapi.NewMessage(ctx.Message.Chat.ID, text)
+	msg.ReplyToMessageID = ctx.Message.MessageID
 	_, err := ctx.Bot.Send(msg)
 	return err
 }

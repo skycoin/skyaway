@@ -1,7 +1,8 @@
 package db
 
 import (
-	"time"
+	"strings"
+	"fmt"
 
 	_ "github.com/lib/pq"
 	"github.com/gocraft/dbr"
@@ -17,9 +18,8 @@ type User struct {
 	UserName  string       `db:"username" json:"username,omitempty"`
 	FirstName string       `json:"first_name,omitempty"`
 	LastName  string       `json:"last_name,omitempty"`
-	JoinedAt  dbr.NullTime `json:"joined_at,omitempty"`
-	LeftAt    dbr.NullTime `json:"left_at,omitempty"`
-	BannedAt  dbr.NullTime `json:"banned_at,omitempty"`
+	Enlisted  bool         `json:"enlisted"`
+	Banned    bool         `json:"banned"`
 	Admin     bool         `json:"admin"`
 
 	exists    bool
@@ -82,27 +82,27 @@ func GetUser(id int) *User {
 	return &user
 }
 
-func inThePast(t dbr.NullTime) bool {
-	return t.Valid && t.Time.Before(time.Now())
-}
-
-func (u *User) Eligible() bool {
-	if inThePast(u.BannedAt) {
-		return false
-	}
-	if inThePast(u.JoinedAt) {
-		if inThePast(u.LeftAt) {
-			// re-joined after leaving
-			return u.JoinedAt.Time.After(u.LeftAt.Time)
-		} else {
-			// joined and not left
-			return true
-		}
-	} else {
-		// never joined (should not happen normally)
-		return false
-	}
-}
+//func inThePast(t dbr.NullTime) bool {
+//	return t.Valid && t.Time.Before(time.Now())
+//}
+//
+//func (u *User) Eligible() bool {
+//	if inThePast(u.BannedAt) {
+//		return false
+//	}
+//	if inThePast(u.JoinedAt) {
+//		if inThePast(u.LeftAt) {
+//			// re-joined after leaving
+//			return u.JoinedAt.Time.After(u.LeftAt.Time)
+//		} else {
+//			// joined and not left
+//			return true
+//		}
+//	} else {
+//		// never joined (should not happen normally)
+//		return false
+//	}
+//}
 
 func (u *User) Put() error {
 	sess := GetSession()
@@ -111,9 +111,7 @@ func (u *User) Put() error {
 			Set("username", u.UserName).
 			Set("first_name", u.FirstName).
 			Set("last_name", u.LastName).
-			Set("joined_at", u.JoinedAt).
-			Set("left_at", u.LeftAt).
-			Set("banned_at", u.BannedAt).
+			Set("banned", u.Banned).
 			Set("admin", u.Admin).
 			Where("id = ?", u.ID).
 			Exec()
@@ -121,13 +119,28 @@ func (u *User) Put() error {
 	} else {
 		_, err := sess.InsertInto("botuser").Columns(
 			"id", "username", "first_name", "last_name",
-			"joined_at", "left_at", "banned_at",
-			"admin",
+			"banned", "admin",
 		).Record(u).Exec()
 		if err != nil {
 			u.exists = true
 		}
 		return err
+	}
+}
+
+func (u *User) NameAndTags() string {
+	var tags []string
+	if u.Banned {
+		tags = append(tags, "banned")
+	}
+	if u.Admin {
+		tags = append(tags, "admin")
+	}
+
+	if len(tags) > 0 {
+		return fmt.Sprintf("%s (%s)", u.UserName, strings.Join(tags, ", "))
+	} else {
+		return u.UserName
 	}
 }
 

@@ -3,8 +3,17 @@ create table botuser (
 	username text,
 	first_name text,
 	last_name text,
-	joined_at timestamp with time zone,
-	left_at timestamp with time zone,
-	banned_at timestamp with time zone,
+	enlisted bool not null default true,
+	banned bool not null default false,
 	admin bool not null default false
 );
+
+--create type chattype as enum ('private', 'group', 'supergroup', 'channel');
+--create table chat (
+--	id int primary key not null,
+--	title text,
+--	chattype chattype not null,
+--	username text,
+--	first_name text,
+--	last_name text,
+--);
