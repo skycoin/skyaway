@@ -14,6 +14,7 @@ type SkyAwayConfig struct {
 	Token string `json:"token"`
 	ChatID int64 `json:"chat_id"`
 	Database db.Config `json:"database"`
+	EventDuration Duration `json:"event_duration"`
 }
 
 func loadJsonFromFile(filename string, result interface{}) error {
@@ -43,27 +44,85 @@ func loadConfig(filename string) *SkyAwayConfig {
 
 var config = loadConfig("config.json")
 
+type Context struct {
+	Bot *tgbotapi.BotAPI
+	Message *tgbotapi.Message
+}
+
+func (ctx *Context) OnPrivateMessage() error {
+	log.Printf("private message from %s: %s", ctx.Message.From.UserName, ctx.Message.Text)
+	return nil
+}
+
+func (ctx *Context) OnGroupMessage() error {
+	log.Printf("group message from %s: %s", ctx.Message.From.UserName, ctx.Message.Text)
+	return nil
+}
+
+func (ctx *Context) Yell(text string) error {
+	msg := tgbotapi.NewMessage(config.ChatID, text)
+	_, err := ctx.Bot.Send(msg)
+	return err
+}
+
+func (ctx *Context) Whisper(text string) error {
+	msg := tgbotapi.NewMessage(int64(ctx.Message.From.ID), text)
+	_, err := ctx.Bot.Send(msg)
+	return err
+}
+
+func (ctx *Context) Reply(text string) error {
+	msg := tgbotapi.NewMessage(ctx.Message.Chat.ID, text)
+	_, err := ctx.Bot.Send(msg)
+	return err
+}
+
+func (ctx *Context) OnMessage(m *tgbotapi.Message) error {
+	ctx.Message = m
+
+	if ctx.Message.Chat.IsGroup() && ctx.Message.Chat.ID == config.ChatID {
+		return ctx.OnGroupMessage()
+	} else if ctx.Message.Chat.IsPrivate() {
+		return ctx.OnPrivateMessage()
+	} else {
+		log.Printf("unknown chat %d (%s)", ctx.Message.Chat.ID, ctx.Message.Chat.UserName)
+		return nil
+	}
+//
+//	log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
+//
+//	text := update.Message.Text
+//	if text != "" {
+//		msg := tgbotapi.NewMessage(config.ChatID, update.Message.Text)
+//		bot.Send(msg)
+//	}
+
+	//msg := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text)
+	//msg.ReplyToMessageID = update.Message.MessageID
+
+	//bot.Send(msg)
+}
+
 func main() {
 	db.Init(&config.Database)
-
-//	var users []db.User
-//	sess := db.GetSession()
-//	num, err := sess.Select("*").From("botuser").LoadStructs(&users)
-//	if err != nil {
-//		panic(err)
-//	}
-//
-//	log.Printf("%d users: %#v", num, users)
-//	return
 
 	bot, err := tgbotapi.NewBotAPI(config.Token)
 	if err != nil {
 		log.Panic(err)
 	}
 
+	chat, err := bot.GetChat(tgbotapi.ChatConfig{config.ChatID, ""})
+	if err != nil {
+		log.Panic(err)
+	}
+	if !chat.IsGroup() {
+		log.Panic("only group chats supported")
+	}
+
 	bot.Debug = true
 
-	log.Printf("Authorized on account %s", bot.Self.UserName)
+	log.Printf("user: %d %s", bot.Self.ID, bot.Self.UserName)
+	log.Printf("chat: %s %d %s", chat.Type, chat.ID, chat.Title)
 
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -75,24 +134,9 @@ func main() {
 			continue
 		}
 
-		if update.Message.Chat.ID == config.ChatID {
-			log.Printf("-------- my chat id: %d ---------", update.Message.Chat.ID)
-		} else {
-			log.Printf("-------- unknown chat id: %d ---------", update.Message.Chat.ID)
-			//log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
+		ctx := Context{Bot: bot}
+		if err := ctx.OnMessage(update.Message); err != nil {
+			log.Printf("error: %v", err)
 		}
-
-		log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
-
-		text := update.Message.Text
-		if text != "" {
-			msg := tgbotapi.NewMessage(config.ChatID, update.Message.Text)
-			bot.Send(msg)
-		}
-
-		//msg := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text)
-		//msg.ReplyToMessageID = update.Message.MessageID
-
-		//bot.Send(msg)
 	}
 }
