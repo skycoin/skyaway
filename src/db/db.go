@@ -7,7 +7,8 @@ import (
 	"errors"
 
 	_ "github.com/lib/pq"
-	"github.com/gocraft/dbr"
+	"database/sql"
+	"github.com/jmoiron/sqlx"
 )
 
 type Config struct {
@@ -18,8 +19,8 @@ type Config struct {
 type User struct {
 	ID        int          `json:"id"`
 	UserName  string       `db:"username" json:"username,omitempty"`
-	FirstName string       `json:"first_name,omitempty"`
-	LastName  string       `json:"last_name,omitempty"`
+	FirstName string       `db:"first_name" json:"first_name,omitempty"`
+	LastName  string       `db:"last_name" json:"last_name,omitempty"`
 	Enlisted  bool         `json:"enlisted"`
 	Banned    bool         `json:"banned"`
 	Admin     bool         `json:"admin"`
@@ -36,27 +37,24 @@ type Chat struct {
 type Event struct {
 	ID          int          `json:"id"`
 	Duration    Duration     `json:"duration"`
-	ScheduledAt NullTime     `json:"scheduled_at"`
-	StartedAt   NullTime     `json:"started_at"`
-	EndedAt     NullTime     `json:"ended_at"`
+	ScheduledAt NullTime     `db:"scheduled_at" json:"scheduled_at"`
+	StartedAt   NullTime     `db:"started_at" json:"started_at"`
+	EndedAt     NullTime     `db:"ended_at" json:"ended_at"`
 	Coins       int          `json:"coins"`
 	Surprise    bool         `json:"surpruse"`
 }
 
 var config *Config
-var conn *dbr.Connection
+var db *sqlx.DB
 
 func ScheduleEvent(coins int, start time.Time, duration Duration, surprise bool) error {
-	event := Event{
-		Coins:       coins,
-		ScheduledAt: NewNullTime(start),
-		Duration:    duration,
-		Surprise:    surprise,
-	}
-	sess := GetSession()
-	_, err := sess.InsertInto("event").Columns(
-		"coins", "duration", "scheduled_at", "surprise",
-	).Record(&event).Exec()
+	db := GetDB()
+	_, err := db.Exec(db.Rebind(`
+		insert into event (
+			coins, duration, scheduled_at, surprise
+		) values (?, ?, ?, ?)`),
+		coins, duration, start, surprise,
+	)
 	return err
 }
 
@@ -64,12 +62,12 @@ func (e *Event) Start() error {
 	if e.StartedAt.Valid {
 		return errors.New("already started")
 	}
-	sess := GetSession()
 	t := NewNullTime(time.Now())
-	_, err := sess.Update("event").
-		Set("started_at", t).
-		Where("id = ?", e.ID).
-		Exec()
+	db := GetDB()
+	_, err := db.Exec(
+		db.Rebind("update event set started_at = ? where id = ?"),
+		t, e.ID,
+	)
 	if err == nil {
 		e.StartedAt = t
 	}
@@ -80,12 +78,12 @@ func (e *Event) End() error {
 	if e.EndedAt.Valid {
 		return errors.New("already ended")
 	}
-	sess := GetSession()
 	t := NewNullTime(time.Now())
-	_, err := sess.Update("event").
-		Set("ended_at", t).
-		Where("id = ?", e.ID).
-		Exec()
+	db := GetDB()
+	_, err := db.Exec(
+		db.Rebind("update event set ended_at = ? where id = ?"),
+		t, e.ID,
+	)
 	if err == nil {
 		e.EndedAt = t
 	}
@@ -94,10 +92,11 @@ func (e *Event) End() error {
 
 func GetCurrentEvent() *Event {
 	var event Event
-	sess := GetSession()
-	err := sess.Select("*").From("event").Where("ended_at is null").LoadStruct(&event)
 
-	if err == dbr.ErrNotFound {
+	db := GetDB()
+	err := db.Get(&event, "select * from event where ended_at is null")
+
+	if err == sql.ErrNoRows {
 		return nil
 	}
 
@@ -109,34 +108,28 @@ func GetCurrentEvent() *Event {
 	return &event
 }
 
-func GetConnection() *dbr.Connection {
-	if conn == nil {
+func GetDB() *sqlx.DB {
+	if db == nil {
 		if config == nil {
 			panic("please call db.Init() before any other method")
 		}
 
-		// TODO: use a real log receiver here instead of `nil`
 		var err error
-		conn, err = dbr.Open(config.Driver, config.Source, nil)
+		db, err = sqlx.Open(config.Driver, config.Source)
 		if err != nil {
 			panic(err)
 		}
 	}
 
-	return conn
-}
-
-func GetSession() *dbr.Session {
-	// TODO: use a real log receiver here instead of `nil`
-	return GetConnection().NewSession(nil)
+	return db
 }
 
 func GetUser(id int) *User {
 	var user User
-	sess := GetSession()
-	err := sess.Select("*").From("botuser").Where("id = ?", id).LoadStruct(&user)
+	db := GetDB()
+	err := db.Get(&user, db.Rebind("select * from botuser id = ?"), id)
 
-	if err == dbr.ErrNotFound {
+	if err == sql.ErrNoRows {
 		return nil
 	}
 
@@ -150,10 +143,10 @@ func GetUser(id int) *User {
 
 func GetUserByName(name string) *User {
 	var user User
-	sess := GetSession()
-	err := sess.Select("*").From("botuser").Where("username = ?", name).LoadStruct(&user)
+	db := GetDB()
+	err := db.Get(&user, db.Rebind("select * from botuser where username = ?"), name)
 
-	if err == dbr.ErrNotFound {
+	if err == sql.ErrNoRows {
 		return nil
 	}
 
@@ -166,14 +159,10 @@ func GetUserByName(name string) *User {
 }
 
 func GetUsers(banned bool) ([]User, error) {
-	sess := GetSession()
-
-	all := sess.Select("*").From("botuser")
-	filtered := all.Where("banned = ?", banned)
-	ordered := filtered.OrderBy("username")
 	var users []User
-	_, err := ordered.LoadStructs(&users)
+	db := GetDB()
 
+	err := db.Select(&users, db.Rebind("select * from botuser where banned = ? order by username"), banned)
 	if err != nil {
 		return nil, err
 	}
@@ -182,12 +171,10 @@ func GetUsers(banned bool) ([]User, error) {
 }
 
 func GetUserCount(banned bool) (int, error) {
-	sess := GetSession()
-
-	query := sess.Select("count(*)").From("botuser").Where("banned = ?", banned)
 	var count int
-	err := query.LoadValue(&count)
+	db := GetDB()
 
+	err := db.Get(&count, db.Rebind("select count(*) from botuser where banned = ?"), banned)
 	if err != nil {
 		return 0, err
 	}
@@ -196,23 +183,38 @@ func GetUserCount(banned bool) (int, error) {
 }
 
 func (u *User) Put() error {
-	sess := GetSession()
+	db := GetDB()
 	if u.exists {
-		_, err := sess.Update("botuser").
-			Set("username", u.UserName).
-			Set("first_name", u.FirstName).
-			Set("last_name", u.LastName).
-			Set("banned", u.Banned).
-			Set("admin", u.Admin).
-			Where("id = ?", u.ID).
-			Exec()
+		_, err := db.Exec(db.Rebind(`
+			update botuser
+				set username = ?,
+				first_name = ?,
+				last_name = ?,
+				banned = ?,
+				admin = ?
+			where id = ?`),
+			u.UserName,
+			u.FirstName,
+			u.LastName,
+			u.Banned,
+			u.Admin,
+			u.ID,
+		)
 		return err
 	} else {
-		_, err := sess.InsertInto("botuser").Columns(
-			"id", "username", "first_name", "last_name",
-			"banned", "admin",
-		).Record(u).Exec()
-		if err != nil {
+		_, err := db.Exec(db.Rebind(`
+			insert into botuser (
+				id, username, first_name, last_name,
+				banned, admin
+			) values (?, ?, ?, ?, ?, ?)`),
+			u.ID,
+			u.UserName,
+			u.FirstName,
+			u.LastName,
+			u.Banned,
+			u.Admin,
+		)
+		if err == nil {
 			u.exists = true
 		}
 		return err
