@@ -58,6 +58,17 @@ func ScheduleEvent(coins int, start time.Time, duration Duration, surprise bool)
 	return err
 }
 
+func StartEvent(coins int, duration Duration) error {
+	db := GetDB()
+	_, err := db.Exec(db.Rebind(`
+		insert into event (
+			coins, duration, started_at, surprise
+		) values (?, ?, ?, ?)`),
+		coins, duration, time.Now(), true,
+	)
+	return err
+}
+
 func (e *Event) Start() error {
 	if e.StartedAt.Valid {
 		return errors.New("already started")

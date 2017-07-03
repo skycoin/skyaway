@@ -221,31 +221,61 @@ func NiceDuration(d time.Duration) string {
 	}
 }
 
-func (ctx *Context) OnScheduleEvent(coins int, t time.Time, surprise bool) error {
+func (ctx *Context) StopIfHaveCurrentEvent() (bool, error) {
 	if event := db.GetCurrentEvent(); event != nil {
 		if event.StartedAt.Valid {
-			return ctx.ReplyInMarkdown(fmt.Sprintf(
+			return true, ctx.ReplyInMarkdown(fmt.Sprintf(
 				"Already have an active event\n" +
 				"*Coins:* %d\n" +
 				"*Started:* %s (%s ago)\n" +
-				"*Duration:* %s\n",
+				"*Duration:* %s",
 				event.Coins,
 				event.StartedAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
 				NiceDuration(time.Since(event.StartedAt.Time)),
 				NiceDuration(event.Duration.Duration),
 			))
 		} else {
-			return ctx.ReplyInMarkdown(fmt.Sprintf(
+			return true, ctx.ReplyInMarkdown(fmt.Sprintf(
 				"Already have an event in schedule\n" +
 				"*Coins:* %d\n" +
 				"*Start:* %s (%s from now)\n" +
-				"*Duration:* %s\n",
+				"*Duration:* %s\n" +
+				"*Surprise:* %t",
 				event.Coins,
 				event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
 				NiceDuration(time.Until(event.ScheduledAt.Time)),
 				NiceDuration(event.Duration.Duration),
+				event.Surprise,
 			))
 		}
+	}
+	return false, nil
+}
+
+func (ctx *Context) OnStartEvent(coins int) error {
+	haveCurrent, err := ctx.StopIfHaveCurrentEvent()
+	if haveCurrent || err != nil {
+		return err
+	}
+
+	ctx.ReplyInMarkdown(fmt.Sprintf(
+		"Starting an event\n" +
+		"*Coins:* %d\n" +
+		"*Duration:* %s",
+		coins,
+		NiceDuration(config.EventDuration.Duration),
+	))
+	err = db.StartEvent(coins, config.EventDuration)
+	if err != nil {
+		log.Printf("failed to start event: %#v", err)
+	}
+	return err
+}
+
+func (ctx *Context) OnScheduleEvent(coins int, t time.Time, surprise bool) error {
+	haveCurrent, err := ctx.StopIfHaveCurrentEvent()
+	if haveCurrent || err != nil {
+		return err
 	}
 
 	ctx.ReplyInMarkdown(fmt.Sprintf(
@@ -260,7 +290,7 @@ func (ctx *Context) OnScheduleEvent(coins int, t time.Time, surprise bool) error
 		NiceDuration(config.EventDuration.Duration),
 		surprise,
 	))
-	err := db.ScheduleEvent(coins, t, config.EventDuration, surprise)
+	err = db.ScheduleEvent(coins, t, config.EventDuration, surprise)
 	if err != nil {
 		log.Printf("failed to schedule event: %#v", err)
 	}
@@ -297,6 +327,15 @@ func (ctx *Context) OnCommand(command string, args string) error {
 			return ctx.OnAddUser(args)
 		case "banuser":
 			return ctx.OnSetBanned(args, true)
+		case "startevent":
+			coins, err := strconv.Atoi(args)
+			if err != nil {
+				return ctx.Reply(
+					"malformed coins format: use an integer number",
+				)
+			}
+
+			return ctx.OnStartEvent(coins)
 		case "scheduleevent":
 			words := strings.Fields(args)
 			if len(words) < 2 {
