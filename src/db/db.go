@@ -3,6 +3,8 @@ package db
 import (
 	"strings"
 	"fmt"
+	"time"
+	"errors"
 
 	_ "github.com/lib/pq"
 	"github.com/gocraft/dbr"
@@ -33,15 +35,79 @@ type Chat struct {
 
 type Event struct {
 	ID          int          `json:"id"`
-	Duration    int          `json:"duration"`
-	ScheduledAt dbr.NullTime `json:"scheduled_at"`
-	StartedAt   dbr.NullTime `json:"started_at"`
-	EndedAt     dbr.NullTime `json:"ended_at"`
+	Duration    Duration     `json:"duration"`
+	ScheduledAt NullTime     `json:"scheduled_at"`
+	StartedAt   NullTime     `json:"started_at"`
+	EndedAt     NullTime     `json:"ended_at"`
 	Coins       int          `json:"coins"`
+	Surprise    bool         `json:"surpruse"`
 }
 
 var config *Config
 var conn *dbr.Connection
+
+func ScheduleEvent(coins int, start time.Time, duration Duration, surprise bool) error {
+	event := Event{
+		Coins:       coins,
+		ScheduledAt: NewNullTime(start),
+		Duration:    duration,
+		Surprise:    surprise,
+	}
+	sess := GetSession()
+	_, err := sess.InsertInto("event").Columns(
+		"coins", "duration", "scheduled_at", "surprise",
+	).Record(&event).Exec()
+	return err
+}
+
+func (e *Event) Start() error {
+	if e.StartedAt.Valid {
+		return errors.New("already started")
+	}
+	sess := GetSession()
+	t := NewNullTime(time.Now())
+	_, err := sess.Update("event").
+		Set("started_at", t).
+		Where("id = ?", e.ID).
+		Exec()
+	if err == nil {
+		e.StartedAt = t
+	}
+	return err
+}
+
+func (e *Event) End() error {
+	if e.EndedAt.Valid {
+		return errors.New("already ended")
+	}
+	sess := GetSession()
+	t := NewNullTime(time.Now())
+	_, err := sess.Update("event").
+		Set("ended_at", t).
+		Where("id = ?", e.ID).
+		Exec()
+	if err == nil {
+		e.EndedAt = t
+	}
+	return err
+}
+
+func GetCurrentEvent() *Event {
+	var event Event
+	sess := GetSession()
+	err := sess.Select("*").From("event").Where("ended_at is null").LoadStruct(&event)
+
+	if err == dbr.ErrNotFound {
+		return nil
+	}
+
+	if err != nil {
+		panic(err)
+		return nil
+	}
+
+	return &event
+}
 
 func GetConnection() *dbr.Connection {
 	if conn == nil {
@@ -128,28 +194,6 @@ func GetUserCount(banned bool) (int, error) {
 
 	return count, nil
 }
-
-//func inThePast(t dbr.NullTime) bool {
-//	return t.Valid && t.Time.Before(time.Now())
-//}
-//
-//func (u *User) Eligible() bool {
-//	if inThePast(u.BannedAt) {
-//		return false
-//	}
-//	if inThePast(u.JoinedAt) {
-//		if inThePast(u.LeftAt) {
-//			// re-joined after leaving
-//			return u.JoinedAt.Time.After(u.LeftAt.Time)
-//		} else {
-//			// joined and not left
-//			return true
-//		}
-//	} else {
-//		// never joined (should not happen normally)
-//		return false
-//	}
-//}
 
 func (u *User) Put() error {
 	sess := GetSession()

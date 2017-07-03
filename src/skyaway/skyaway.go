@@ -10,15 +10,16 @@ import (
 	"strings"
 
 	"gopkg.in/telegram-bot-api.v4"
+	"github.com/bcampbell/fuzzytime"
 
 	"db"
 )
 
 type SkyAwayConfig struct {
-	Token string `json:"token"`
-	ChatID int64 `json:"chat_id"`
-	Database db.Config `json:"database"`
-	EventDuration Duration `json:"event_duration"`
+	Token         string      `json:"token"`
+	ChatID        int64       `json:"chat_id"`
+	Database      db.Config   `json:"database"`
+	EventDuration db.Duration `json:"event_duration"`
 }
 
 func loadJsonFromFile(filename string, result interface{}) error {
@@ -49,7 +50,7 @@ func loadConfig(filename string) *SkyAwayConfig {
 var config = loadConfig("config.json")
 
 type Context struct {
-	Bot *tgbotapi.BotAPI
+	Bot     *tgbotapi.BotAPI
 	Message *tgbotapi.Message
 }
 
@@ -89,7 +90,7 @@ func (ctx *Context) OnSetEventDuration(dur time.Duration) error {
 	if dur <= 0 {
 		return ctx.Reply("event duration has to be positive")
 	}
-	config.EventDuration = Duration{dur}
+	config.EventDuration = db.Duration{Duration: dur, Valid: true}
 	return ctx.Reply(fmt.Sprintf("new event duration: %s", config.EventDuration))
 }
 
@@ -191,6 +192,81 @@ func (ctx *Context) OnSettings() error {
 	return ctx.Reply(fmt.Sprintf("current settings: %s", string(encoded)))
 }
 
+func NiceDuration(d time.Duration) string {
+	if d < 0 {
+		return d.String()
+	}
+
+	var hours, minutes, seconds int
+	seconds = int(d.Seconds())
+	hours, seconds = seconds / 3600, seconds % 3600
+	minutes, seconds = seconds / 60, seconds % 60
+
+	if hours > 0 {
+		if minutes > 0 {
+			return fmt.Sprintf("%dh%dm", hours, minutes)
+		} else {
+			return fmt.Sprintf("%dh", hours)
+		}
+	} else {
+		if minutes > 0 {
+			if seconds > 0 {
+				return fmt.Sprintf("%dm%ds", minutes, seconds)
+			} else {
+				return fmt.Sprintf("%dm", minutes)
+			}
+		} else {
+			return fmt.Sprintf("%ds", seconds)
+		}
+	}
+}
+
+func (ctx *Context) OnScheduleEvent(coins int, t time.Time, surprise bool) error {
+	if event := db.GetCurrentEvent(); event != nil {
+		if event.StartedAt.Valid {
+			return ctx.ReplyInMarkdown(fmt.Sprintf(
+				"Already have an active event\n" +
+				"*Coins:* %d\n" +
+				"*Started:* %s (%s ago)\n" +
+				"*Duration:* %s\n",
+				event.Coins,
+				event.StartedAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
+				NiceDuration(time.Since(event.StartedAt.Time)),
+				NiceDuration(event.Duration.Duration),
+			))
+		} else {
+			return ctx.ReplyInMarkdown(fmt.Sprintf(
+				"Already have an event in schedule\n" +
+				"*Coins:* %d\n" +
+				"*Start:* %s (%s from now)\n" +
+				"*Duration:* %s\n",
+				event.Coins,
+				event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
+				NiceDuration(time.Until(event.ScheduledAt.Time)),
+				NiceDuration(event.Duration.Duration),
+			))
+		}
+	}
+
+	ctx.ReplyInMarkdown(fmt.Sprintf(
+		"Scheduling an event\n" +
+		"*Coins:* %d\n" +
+		"*Start:* %s (%s from now)\n" +
+		"*Duration:* %s\n" +
+		"*Surprise:* %t",
+		coins,
+		t.Format("Jan 2 2006, 15:04:05 -0700"),
+		NiceDuration(time.Until(t)),
+		NiceDuration(config.EventDuration.Duration),
+		surprise,
+	))
+	err := db.ScheduleEvent(coins, t, config.EventDuration, surprise)
+	if err != nil {
+		log.Printf("failed to schedule event: %#v", err)
+	}
+	return err
+}
+
 func (ctx *Context) OnCommand(command string, args string) error {
 	switch command {
 		case "help":
@@ -207,8 +283,7 @@ func (ctx *Context) OnCommand(command string, args string) error {
 
 			dur, err := time.ParseDuration(args)
 			if err != nil {
-				ctx.Reply("malformed duration format: use something like 1.5, 1.5h, or 1h30m")
-				return nil
+				return ctx.Reply("malformed duration format: use something like 1.5, 1.5h, or 1h30m")
 			}
 
 			return ctx.OnSetEventDuration(dur)
@@ -222,6 +297,81 @@ func (ctx *Context) OnCommand(command string, args string) error {
 			return ctx.OnAddUser(args)
 		case "banuser":
 			return ctx.OnSetBanned(args, true)
+		case "scheduleevent":
+			words := strings.Fields(args)
+			if len(words) < 2 {
+				return ctx.Reply(
+					"insufficient arguments to /scheduleevent:" +
+					"use something like `/scheduleevent 5 23:00 surprise",
+				)
+			}
+
+			coins, err := strconv.Atoi(words[0])
+			if err != nil {
+				return ctx.Reply(
+					"insufficient arguments to /scheduleevent:" +
+					"use something like `/scheduleevent 5 23:00 surprise",
+				)
+			}
+
+			surprise := words[len(words)-1] == "surprise"
+			if surprise {
+				// cut out the first and last word
+				words = words[1:len(words)-1]
+			} else {
+				// cut out the first word
+				words = words[1:len(words)]
+			}
+
+			timestr := strings.Join(words, " ")
+			ft, _, err := fuzzytime.Extract(timestr)
+			if ft.Empty() {
+				return ctx.Reply("wrong datetime format")
+			}
+
+			var hour, minute, second int
+			var loc *time.Location
+			if ft.Time.HasHour() {
+				hour = ft.Time.Hour()
+			}
+			if ft.Time.HasMinute() {
+				minute = ft.Time.Minute()
+			}
+			if ft.Time.HasSecond() {
+				second = ft.Time.Second()
+			}
+			if ft.Time.HasTZOffset() {
+				loc = time.FixedZone("", ft.Time.TZOffset())
+			} else {
+				loc = time.UTC
+			}
+
+			var t time.Time
+			if ft.HasFullDate() {
+				t = time.Date(
+					ft.Date.Year(),
+					time.Month(ft.Date.Month()),
+					ft.Date.Day(),
+					hour, minute, second, 0,
+					loc,
+				)
+			} else {
+				year, month, day := time.Now().In(loc).Date()
+				t = time.Date(
+					year, month, day,
+					hour, minute, second, 0,
+					loc,
+				)
+				if t.Before(time.Now()) {
+					t = t.AddDate(0, 0, 1)
+				}
+			}
+
+			if t.Before(time.Now()) {
+				return ctx.Reply(fmt.Sprintf("%s is in the past", t.String()))
+			}
+
+			return ctx.OnScheduleEvent(coins, t, surprise)
 		default:
 			log.Printf("command not found: %s", command)
 	}
@@ -325,11 +475,30 @@ func (ctx *Context) Whisper(text string) error {
 	return err
 }
 
-func (ctx *Context) Reply(text string) error {
+func (ctx *Context) ReplyInParseMode(text, parseMode string) error {
 	msg := tgbotapi.NewMessage(ctx.Message.Chat.ID, text)
+	switch parseMode {
+		case "markdown":
+			msg.ParseMode = "Markdown"
+		case "html":
+			msg.ParseMode = "HTML"
+		case "text":
+			msg.ParseMode = ""
+		default:
+			return fmt.Errorf("unsupported parse mode: %s", parseMode)
+	}
 	msg.ReplyToMessageID = ctx.Message.MessageID
 	_, err := ctx.Bot.Send(msg)
 	return err
+
+}
+
+func (ctx *Context) ReplyInMarkdown(text string) error {
+	return ctx.ReplyInParseMode(text, "markdown")
+}
+
+func (ctx *Context) Reply(text string) error {
+	return ctx.ReplyInParseMode(text, "text")
 }
 
 func (ctx *Context) OnMessage(m *tgbotapi.Message) error {
@@ -343,19 +512,6 @@ func (ctx *Context) OnMessage(m *tgbotapi.Message) error {
 		log.Printf("unknown chat %d (%s)", ctx.Message.Chat.ID, ctx.Message.Chat.UserName)
 		return nil
 	}
-//
-//	log.Printf("[%s] %s", update.Message.From.UserName, update.Message.Text)
-//
-//	text := update.Message.Text
-//	if text != "" {
-//		msg := tgbotapi.NewMessage(config.ChatID, update.Message.Text)
-//		bot.Send(msg)
-//	}
-
-	//msg := tgbotapi.NewMessage(update.Message.Chat.ID, update.Message.Text)
-	//msg.ReplyToMessageID = update.Message.MessageID
-
-	//bot.Send(msg)
 }
 
 func main() {
