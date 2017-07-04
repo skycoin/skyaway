@@ -25,13 +25,19 @@ type SkyAwayConfig struct {
 func loadJsonFromFile(filename string, result interface{}) error {
 	infile, err := os.Open(filename)
 	if err != nil {
-		return err
+		return fmt.Errorf(
+			"failed to open json from file '%s': %v",
+			filename, err,
+		)
 	}
 	defer infile.Close()
 
 	decoder := json.NewDecoder(infile)
 	if err := decoder.Decode(result); err != nil {
-		return err
+		return fmt.Errorf(
+			"failed to decode json from file '%s': %v",
+			filename, err,
+		)
 	}
 
 	return nil
@@ -98,8 +104,7 @@ func (ctx *Context) OnUserCount(banned bool) error {
 	count, err := db.GetUserCount(banned)
 
 	if err != nil {
-		log.Printf("failed to get user count from db: %v", err)
-		return err
+		return fmt.Errorf("failed to get user count from db: %v", err)
 	}
 
 	return ctx.Reply(strconv.Itoa(count))
@@ -109,8 +114,7 @@ func (ctx *Context) OnUsers(banned bool) error {
 	users, err := db.GetUsers(banned)
 
 	if err != nil {
-		log.Printf("failed to get users from db: %v", err)
-		return err
+		return fmt.Errorf("failed to get users from db: %v", err)
 	}
 
 	var lines []string
@@ -142,8 +146,7 @@ func (ctx *Context) OnAddUser(name string) error {
 	}
 	if len(actions) > 0 {
 		if err := user.Put(); err != nil {
-			log.Printf("failed to save the user to db: %v", err)
-			return err
+			return fmt.Errorf("failed to change user status: %v", err)
 		}
 		return ctx.Reply(strings.Join(actions, ", "))
 	}
@@ -158,8 +161,7 @@ func (ctx *Context) OnSetBanned(name string, banned bool) error {
 	if user.Banned != banned {
 		user.Banned = banned
 		if err := user.Put(); err != nil {
-			log.Printf("failed to save the user to db: %v", err)
-			return err
+			return fmt.Errorf("failed to change user status: %v", err)
 		}
 	}
 	return ctx.Reply(user.NameAndTags())
@@ -168,8 +170,7 @@ func (ctx *Context) OnSetBanned(name string, banned bool) error {
 func (ctx *Context) OnSettings() error {
 	chat, err := ctx.Bot.GetChat(tgbotapi.ChatConfig{config.ChatID, ""})
 	if err != nil {
-		log.Printf("failed to get chat info: %v", err)
-		return err
+		return fmt.Errorf("failed to get chat info: %v", err)
 	}
 
 	settings := map[string]interface{}{
@@ -186,8 +187,7 @@ func (ctx *Context) OnSettings() error {
 	}
 	encoded, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
-		log.Printf("failed to encode current settings into json: %v", err)
-		return err
+		return fmt.Errorf("failed to encode current settings into json: %v", err)
 	}
 	return ctx.Reply(fmt.Sprintf("current settings: %s", string(encoded)))
 }
@@ -221,80 +221,119 @@ func NiceDuration(d time.Duration) string {
 	}
 }
 
-func (ctx *Context) StopIfHaveCurrentEvent() (bool, error) {
+func formatEventAsMarkdown(event *db.Event) string {
+	if event.StartedAt.Valid {
+		return fmt.Sprintf(
+			"*Coins:* %d\n" +
+			"*Started:* %s (%s ago)\n" +
+			"*Duration:* %s",
+			event.Coins,
+			event.StartedAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
+			NiceDuration(time.Since(event.StartedAt.Time)),
+			NiceDuration(event.Duration.Duration),
+		)
+	} else {
+		return fmt.Sprintf(
+			"*Coins:* %d\n" +
+			"*Start:* %s (%s from now)\n" +
+			"*Duration:* %s\n" +
+			"*Surprise:* %t",
+			event.Coins,
+			event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
+			NiceDuration(time.Until(event.ScheduledAt.Time)),
+			NiceDuration(event.Duration.Duration),
+			event.Surprise,
+		)
+	}
+}
+
+func (ctx *Context) ComplainIfHaveCurrentEvent() (bool, error) {
 	if event := db.GetCurrentEvent(); event != nil {
 		if event.StartedAt.Valid {
-			return true, ctx.ReplyInMarkdown(fmt.Sprintf(
-				"Already have an active event\n" +
-				"*Coins:* %d\n" +
-				"*Started:* %s (%s ago)\n" +
-				"*Duration:* %s",
-				event.Coins,
-				event.StartedAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
-				NiceDuration(time.Since(event.StartedAt.Time)),
-				NiceDuration(event.Duration.Duration),
-			))
+			return true, ctx.ReplyAboutEvent("already have an active event", event)
 		} else {
-			return true, ctx.ReplyInMarkdown(fmt.Sprintf(
-				"Already have an event in schedule\n" +
-				"*Coins:* %d\n" +
-				"*Start:* %s (%s from now)\n" +
-				"*Duration:* %s\n" +
-				"*Surprise:* %t",
-				event.Coins,
-				event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
-				NiceDuration(time.Until(event.ScheduledAt.Time)),
-				NiceDuration(event.Duration.Duration),
-				event.Surprise,
-			))
+			return true, ctx.ReplyAboutEvent("already have an event in schedule", event)
 		}
 	}
 	return false, nil
 }
 
 func (ctx *Context) OnStartEvent(coins int) error {
-	haveCurrent, err := ctx.StopIfHaveCurrentEvent()
+	haveCurrent, err := ctx.ComplainIfHaveCurrentEvent()
 	if haveCurrent || err != nil {
 		return err
 	}
 
-	ctx.ReplyInMarkdown(fmt.Sprintf(
-		"Starting an event\n" +
-		"*Coins:* %d\n" +
-		"*Duration:* %s",
-		coins,
-		NiceDuration(config.EventDuration.Duration),
-	))
-	err = db.StartEvent(coins, config.EventDuration)
+	err = db.StartNewEvent(coins, config.EventDuration)
 	if err != nil {
-		log.Printf("failed to start event: %#v", err)
+		return fmt.Errorf("failed to start event: %v", err)
 	}
-	return err
+
+	event := db.GetCurrentEvent()
+	if event == nil {
+		return fmt.Errorf("event did not start due to reasons unknown")
+	}
+
+	return ctx.ReplyAboutEvent("event started", event)
+}
+
+func (ctx *Context) OnCancelEvent() error {
+	event := db.GetCurrentEvent()
+	if event == nil {
+		return ctx.Reply("nothing to cancel")
+	}
+
+	if event.StartedAt.Valid {
+		return ctx.ReplyAboutEvent(
+			"the event has already started, use /stopevent instead",
+			event,
+		)
+	}
+
+	if err := event.End(); err != nil {
+		return fmt.Errorf("failed to cancel event: %v", err)
+	}
+
+	return ctx.ReplyAboutEvent("event cancelled", event)
+}
+
+func (ctx *Context) OnStopEvent() error {
+	event := db.GetCurrentEvent()
+	if event == nil {
+		return ctx.Reply("nothing to stop")
+	}
+
+	if !event.StartedAt.Valid {
+		return ctx.ReplyAboutEvent(
+			"the event has not started yet, use /cancelevent instead",
+			event,
+		)
+	}
+
+	if err := event.End(); err != nil {
+		return fmt.Errorf("failed to stop event: %v", err)
+	}
+
+	return ctx.ReplyAboutEvent("event stopped", event)
 }
 
 func (ctx *Context) OnScheduleEvent(coins int, t time.Time, surprise bool) error {
-	haveCurrent, err := ctx.StopIfHaveCurrentEvent()
+	haveCurrent, err := ctx.ComplainIfHaveCurrentEvent()
 	if haveCurrent || err != nil {
 		return err
 	}
 
-	ctx.ReplyInMarkdown(fmt.Sprintf(
-		"Scheduling an event\n" +
-		"*Coins:* %d\n" +
-		"*Start:* %s (%s from now)\n" +
-		"*Duration:* %s\n" +
-		"*Surprise:* %t",
-		coins,
-		t.Format("Jan 2 2006, 15:04:05 -0700"),
-		NiceDuration(time.Until(t)),
-		NiceDuration(config.EventDuration.Duration),
-		surprise,
-	))
 	err = db.ScheduleEvent(coins, t, config.EventDuration, surprise)
 	if err != nil {
-		log.Printf("failed to schedule event: %#v", err)
+		return fmt.Errorf("failed to schedule event: %v", err)
 	}
-	return err
+
+	event := db.GetCurrentEvent()
+	if event == nil {
+		return fmt.Errorf("event was not scheduled due to reasons unknown")
+	}
+
+	return ctx.ReplyAboutEvent("event scheduled", event)
 }
 
 func (ctx *Context) OnCommand(command string, args string) error {
@@ -411,6 +450,10 @@ func (ctx *Context) OnCommand(command string, args string) error {
 			}
 
 			return ctx.OnScheduleEvent(coins, t, surprise)
+		case "cancelevent":
+			return ctx.OnCancelEvent()
+		case "stopevent":
+			return ctx.OnStopEvent()
 		default:
 			log.Printf("command not found: %s", command)
 	}
@@ -420,7 +463,12 @@ func (ctx *Context) OnCommand(command string, args string) error {
 func (ctx *Context) OnPrivateMessage() error {
 	//log.Printf("private message from %s: %s", ctx.Message.From.UserName, ctx.Message.Text)
 	if ctx.Message.IsCommand() {
-		return ctx.OnCommand(ctx.Message.Command(), ctx.Message.CommandArguments())
+		cmd, args := ctx.Message.Command(), ctx.Message.CommandArguments()
+		err := ctx.OnCommand(cmd, args)
+		if err != nil {
+			log.Printf("command '/%s %s' failed: %v", cmd, args, err)
+			ctx.Reply(fmt.Sprintf("command failed: %v", err))
+		}
 	}
 	return nil
 }
@@ -532,6 +580,12 @@ func (ctx *Context) ReplyInParseMode(text, parseMode string) error {
 
 }
 
+func (ctx *Context) ReplyAboutEvent(text string, event *db.Event) error {
+	return ctx.ReplyInMarkdown(fmt.Sprintf(
+		"%s\n%s", text, formatEventAsMarkdown(event),
+	))
+}
+
 func (ctx *Context) ReplyInMarkdown(text string) error {
 	return ctx.ReplyInParseMode(text, "markdown")
 }
@@ -568,8 +622,6 @@ func main() {
 	if !chat.IsGroup() {
 		log.Panic("only group chats supported")
 	}
-
-	bot.Debug = true
 
 	log.Printf("user: %d %s", bot.Self.ID, bot.Self.UserName)
 	log.Printf("chat: %s %d %s", chat.Type, chat.ID, chat.Title)

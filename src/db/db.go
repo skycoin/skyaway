@@ -58,7 +58,7 @@ func ScheduleEvent(coins int, start time.Time, duration Duration, surprise bool)
 	return err
 }
 
-func StartEvent(coins int, duration Duration) error {
+func StartNewEvent(coins int, duration Duration) error {
 	db := GetDB()
 	_, err := db.Exec(db.Rebind(`
 		insert into event (
