@@ -221,29 +221,44 @@ func NiceDuration(d time.Duration) string {
 	}
 }
 
-func formatEventAsMarkdown(event *db.Event) string {
+func formatEventAsMarkdown(event *db.Event, public bool) string {
 	if event.StartedAt.Valid {
 		return fmt.Sprintf(
 			"*Coins:* %d\n" +
 			"*Started:* %s (%s ago)\n" +
-			"*Duration:* %s",
+			"*Duration:* %s (ends in %s)",
 			event.Coins,
 			event.StartedAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
 			NiceDuration(time.Since(event.StartedAt.Time)),
 			NiceDuration(event.Duration.Duration),
+			NiceDuration(time.Until(event.StartedAt.Time.Add(event.Duration.Duration))),
 		)
 	} else {
-		return fmt.Sprintf(
-			"*Coins:* %d\n" +
-			"*Start:* %s (%s from now)\n" +
-			"*Duration:* %s\n" +
-			"*Surprise:* %t",
-			event.Coins,
-			event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
-			NiceDuration(time.Until(event.ScheduledAt.Time)),
-			NiceDuration(event.Duration.Duration),
-			event.Surprise,
-		)
+		if public {
+			return fmt.Sprintf(
+				"*Coins:* %d\n" +
+				"*Start:* %s (in %s)\n" +
+				"*Duration:* %s (ends in %s)",
+				event.Coins,
+				event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
+				NiceDuration(time.Until(event.ScheduledAt.Time)),
+				NiceDuration(event.Duration.Duration),
+				NiceDuration(time.Until(event.ScheduledAt.Time.Add(event.Duration.Duration))),
+			)
+		} else {
+			return fmt.Sprintf(
+				"*Coins:* %d\n" +
+				"*Start:* %s (in %s)\n" +
+				"*Duration:* %s (ends in %s)\n" +
+				"*Surprise:* %t",
+				event.Coins,
+				event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
+				NiceDuration(time.Until(event.ScheduledAt.Time)),
+				NiceDuration(event.Duration.Duration),
+				NiceDuration(time.Until(event.ScheduledAt.Time.Add(event.Duration.Duration))),
+				event.Surprise,
+			)
+		}
 	}
 }
 
@@ -337,7 +352,23 @@ func (ctx *Context) OnScheduleEvent(coins int, t time.Time, surprise bool) error
 }
 
 func (ctx *Context) OnAnnounce(msg string) error {
-	ctx.Yell(msg)
+	if err := ctx.Send("yell", "text", msg); err != nil {
+		return fmt.Errorf("failed to announce: %v", err)
+	}
+	return ctx.Reply("done")
+}
+
+func (ctx *Context) OnAnnounceEvent() error {
+	event := db.GetCurrentEvent()
+	if event == nil {
+		return ctx.Reply("nothing to announce")
+	}
+
+	md := formatEventAsMarkdown(event, true)
+	if err := ctx.Send("yell", "markdown", md); err != nil {
+		return fmt.Errorf("failed to announce event: %v", err)
+	}
+
 	return ctx.Reply("done")
 }
 
@@ -465,6 +496,8 @@ func (ctx *Context) OnCommand(command string, args string) error {
 				return ctx.Reply("cannot announce an empty message")
 			}
 			return ctx.OnAnnounce(msg)
+		case "announceevent":
+			return ctx.OnAnnounceEvent()
 		default:
 			log.Printf("command not found: %s", command)
 	}
@@ -561,21 +594,20 @@ func (ctx *Context) OnGroupMessage() error {
 	return gerr
 }
 
-func (ctx *Context) Yell(text string) error {
-	msg := tgbotapi.NewMessage(config.ChatID, text)
-	_, err := ctx.Bot.Send(msg)
-	return err
-}
-
-func (ctx *Context) Whisper(text string) error {
-	msg := tgbotapi.NewMessage(int64(ctx.Message.From.ID), text)
-	_, err := ctx.Bot.Send(msg)
-	return err
-}
-
-func (ctx *Context) ReplyInParseMode(text, parseMode string) error {
-	msg := tgbotapi.NewMessage(ctx.Message.Chat.ID, text)
-	switch parseMode {
+func (ctx *Context) Send(mode, format, text string) error {
+	var msg tgbotapi.MessageConfig
+	switch mode {
+		case "whisper":
+			msg = tgbotapi.NewMessage(int64(ctx.Message.From.ID), text)
+		case "reply":
+			msg = tgbotapi.NewMessage(ctx.Message.Chat.ID, text)
+			msg.ReplyToMessageID = ctx.Message.MessageID
+		case "yell":
+			msg = tgbotapi.NewMessage(config.ChatID, text)
+		default:
+			return fmt.Errorf("unsupported message mode: %s", mode)
+	}
+	switch format {
 		case "markdown":
 			msg.ParseMode = "Markdown"
 		case "html":
@@ -583,26 +615,21 @@ func (ctx *Context) ReplyInParseMode(text, parseMode string) error {
 		case "text":
 			msg.ParseMode = ""
 		default:
-			return fmt.Errorf("unsupported parse mode: %s", parseMode)
+			return fmt.Errorf("unsupported message format: %s", format)
 	}
-	msg.ReplyToMessageID = ctx.Message.MessageID
 	_, err := ctx.Bot.Send(msg)
 	return err
 
 }
 
 func (ctx *Context) ReplyAboutEvent(text string, event *db.Event) error {
-	return ctx.ReplyInMarkdown(fmt.Sprintf(
-		"%s\n%s", text, formatEventAsMarkdown(event),
+	return ctx.Send("reply", "markdown", fmt.Sprintf(
+		"%s\n%s", text, formatEventAsMarkdown(event, false),
 	))
 }
 
-func (ctx *Context) ReplyInMarkdown(text string) error {
-	return ctx.ReplyInParseMode(text, "markdown")
-}
-
 func (ctx *Context) Reply(text string) error {
-	return ctx.ReplyInParseMode(text, "text")
+	return ctx.Send("reply", "text", text)
 }
 
 func (ctx *Context) OnMessage(m *tgbotapi.Message) error {
