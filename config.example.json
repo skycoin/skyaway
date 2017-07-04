@@ -4,5 +4,6 @@
 	"database": {
 		"driver": "postgres",
 		"source": "dbname=skyaway user=skyaway"
-	}
+	},
+	"event_duration": "1h"
 }
