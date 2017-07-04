@@ -336,6 +336,11 @@ func (ctx *Context) OnScheduleEvent(coins int, t time.Time, surprise bool) error
 	return ctx.ReplyAboutEvent("event scheduled", event)
 }
 
+func (ctx *Context) OnAnnounce(msg string) error {
+	ctx.Yell(msg)
+	return ctx.Reply("done")
+}
+
 func (ctx *Context) OnCommand(command string, args string) error {
 	switch command {
 		case "help":
@@ -454,6 +459,12 @@ func (ctx *Context) OnCommand(command string, args string) error {
 			return ctx.OnCancelEvent()
 		case "stopevent":
 			return ctx.OnStopEvent()
+		case "announce":
+			msg := strings.TrimSpace(args)
+			if msg == "" {
+				return ctx.Reply("cannot announce an empty message")
+			}
+			return ctx.OnAnnounce(msg)
 		default:
 			log.Printf("command not found: %s", command)
 	}
