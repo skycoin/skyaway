@@ -130,12 +130,11 @@ func (ctx *Context) OnUsers(banned bool) error {
 	}
 }
 
-func (ctx *Context) OnAddUser(name string) error {
-	user := db.GetUserByName(name)
-	if user == nil {
-		return ctx.Reply("no user by that name")
-	}
+func (ctx *Context) MakeEligible(user *db.User) error {
 	var actions []string
+	if !user.Exists() {
+		actions = append(actions, "created")
+	}
 	if user.Banned {
 		user.Banned = false
 		actions = append(actions, "unbanned")
@@ -151,6 +150,40 @@ func (ctx *Context) OnAddUser(name string) error {
 		return ctx.Reply(strings.Join(actions, ", "))
 	}
 	return ctx.Reply("no action required")
+}
+
+func (ctx *Context) OnAddUserByForward(id int) error {
+	args := tgbotapi.ChatConfigWithUser{config.ChatID, "", id}
+
+	member, err := ctx.Bot.GetChatMember(args)
+	if err != nil {
+		return fmt.Errorf("failed to get chat member from telegram: %v", err)
+	}
+
+	if !member.IsMember() && !member.IsCreator() && !member.IsAdministrator() {
+		return ctx.Reply("that user is not a member of the chat")
+	}
+
+	user := member.User
+	log.Printf("forwarded from user: %#v", user)
+	dbuser := db.GetUser(user.ID)
+	if dbuser == nil {
+		dbuser = &db.User{
+			ID: user.ID,
+			UserName: user.UserName,
+			FirstName: user.FirstName,
+			LastName: user.LastName,
+		}
+	}
+	return ctx.MakeEligible(dbuser)
+}
+
+func (ctx *Context) OnAddUser(name string) error {
+	dbuser := db.GetUserByName(name)
+	if dbuser == nil {
+		return ctx.Reply("no user by that name")
+	}
+	return ctx.MakeEligible(dbuser)
 }
 
 func (ctx *Context) OnSetBanned(name string, banned bool) error {
@@ -506,6 +539,15 @@ func (ctx *Context) OnCommand(command string, args string) error {
 
 func (ctx *Context) OnPrivateMessage() error {
 	//log.Printf("private message from %s: %s", ctx.Message.From.UserName, ctx.Message.Text)
+	// FIXME: check if admin
+	if u := ctx.Message.ForwardFrom; u != nil {
+		err := ctx.OnAddUserByForward(u.ID)
+		if err != nil {
+			log.Printf("failed to add user %s: %v", u.String(), err)
+			ctx.Reply(fmt.Sprintf("failed to add user %s: %v", u.String(), err))
+		}
+		return nil
+	}
 	if ctx.Message.IsCommand() {
 		cmd, args := ctx.Message.Command(), ctx.Message.CommandArguments()
 		err := ctx.OnCommand(cmd, args)
