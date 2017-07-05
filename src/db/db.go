@@ -322,6 +322,10 @@ func (u *User) NameAndTags() string {
 	}
 }
 
+func (u *User) Exists() bool {
+	return u.exists
+}
+
 func Init(newConfig *Config) {
 	config = newConfig
 }
