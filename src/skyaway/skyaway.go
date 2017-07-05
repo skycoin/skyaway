@@ -254,45 +254,43 @@ func NiceDuration(d time.Duration) string {
 	}
 }
 
+func appendField(fields []string, name, format string, args ...interface{}) []string {
+	value := fmt.Sprintf(format, args...)
+	return append(fields, fmt.Sprintf("*%s*: %s", strings.Title(name), value))
+}
+
 func formatEventAsMarkdown(event *db.Event, public bool) string {
+	var fields []string
+	fields = appendField(fields, "coins", "%d", event.Coins)
 	if event.StartedAt.Valid {
-		return fmt.Sprintf(
-			"*Coins:* %d\n" +
-			"*Started:* %s (%s ago)\n" +
-			"*Duration:* %s (ends in %s)",
-			event.Coins,
+		fields = appendField(fields, "started", "%s (%s ago)",
 			event.StartedAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
 			NiceDuration(time.Since(event.StartedAt.Time)),
-			NiceDuration(event.Duration.Duration),
-			NiceDuration(time.Until(event.StartedAt.Time.Add(event.Duration.Duration))),
 		)
 	} else {
-		if public {
-			return fmt.Sprintf(
-				"*Coins:* %d\n" +
-				"*Start:* %s (in %s)\n" +
-				"*Duration:* %s (ends in %s)",
-				event.Coins,
-				event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
-				NiceDuration(time.Until(event.ScheduledAt.Time)),
-				NiceDuration(event.Duration.Duration),
-				NiceDuration(time.Until(event.ScheduledAt.Time.Add(event.Duration.Duration))),
-			)
-		} else {
-			return fmt.Sprintf(
-				"*Coins:* %d\n" +
-				"*Start:* %s (in %s)\n" +
-				"*Duration:* %s (ends in %s)\n" +
-				"*Surprise:* %t",
-				event.Coins,
-				event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
-				NiceDuration(time.Until(event.ScheduledAt.Time)),
-				NiceDuration(event.Duration.Duration),
-				NiceDuration(time.Until(event.ScheduledAt.Time.Add(event.Duration.Duration))),
-				event.Surprise,
-			)
-		}
+		fields = appendField(fields, "will start", "%s (in %s)",
+			event.ScheduledAt.Time.Format("Jan 2 2006, 15:04:05 -0700"),
+			NiceDuration(time.Until(event.ScheduledAt.Time)),
+		)
 	}
+
+	if event.EndedAt.Valid {
+		fields = appendField(fields, "duration", "%s (ended %s ago)",
+			NiceDuration(event.Duration.Duration),
+			NiceDuration(time.Since(event.EndedAt.Time)),
+		)
+	} else {
+		fields = appendField(fields, "duration", "%s (ends in %s)",
+			NiceDuration(event.Duration.Duration),
+			NiceDuration(time.Since(event.EndedAt.Time)),
+		)
+	}
+
+	if !public {
+		fields = appendField(fields, "surprise", "%t", event.Surprise)
+	}
+
+	return strings.Join(fields, "\n")
 }
 
 func (ctx *Context) ComplainIfHaveCurrentEvent() (bool, error) {
