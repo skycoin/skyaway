@@ -212,7 +212,7 @@ func GetDB() *sqlx.DB {
 func GetUser(id int) *User {
 	var user User
 	db := GetDB()
-	err := db.Get(&user, db.Rebind("select * from botuser id = ?"), id)
+	err := db.Get(&user, db.Rebind("select * from botuser where id = ?"), id)
 
 	if err == sql.ErrNoRows {
 		return nil
