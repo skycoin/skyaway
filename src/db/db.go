@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 	"errors"
+	"math/rand"
 
 	_ "github.com/lib/pq"
 	"database/sql"
@@ -60,13 +61,69 @@ func ScheduleEvent(coins int, start time.Time, duration Duration, surprise bool)
 
 func StartNewEvent(coins int, duration Duration) error {
 	db := GetDB()
-	_, err := db.Exec(db.Rebind(`
+
+	tx, err := db.Beginx()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(tx.Rebind(`
 		insert into event (
 			coins, duration, started_at, surprise
 		) values (?, ?, ?, ?)`),
 		coins, duration, time.Now(), true,
 	)
-	return err
+	if err != nil {
+		return fmt.Errorf("failed to insert event: %v", err)
+	}
+
+	var event Event
+	if err = tx.Get(&event, "select * from event where ended_at is null"); err != nil {
+		return fmt.Errorf("event inserted, but could not be found immediatly after: %v", err)
+	}
+
+	if err := event.addParticipants(tx); err != nil {
+		return fmt.Errorf("failed to add participants: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit the event: %v", err)
+	}
+
+	return nil
+}
+
+func (e *Event) addParticipants(tx *sqlx.Tx) error {
+	var ids []int
+	err := tx.Select(&ids, "select id from botuser where not banned and enlisted")
+	if err != nil {
+		return fmt.Errorf("failed to select eligible users for coin distribution: %v", err)
+	}
+
+	if len(ids) == 0 {
+		return nil
+	}
+
+	coinsPerUser := e.Coins / len(ids)
+	volatility := 0
+	if e.Coins % len(ids) != 0 {
+		volatility = 1
+	}
+
+	for _, uid := range ids {
+		coins := coinsPerUser + rand.Intn(volatility + 1)
+		_, err := tx.Exec(tx.Rebind(`
+			insert into participant (
+				event_id, user_id, coins
+			) values (?, ?, ?)`),
+			e.ID, uid, coins,
+		)
+		if err != nil {
+			return fmt.Errorf("failed to add user to event participants: %v", err)
+		}
+	}
+	return nil
 }
 
 func (e *Event) Start() error {
@@ -75,14 +132,31 @@ func (e *Event) Start() error {
 	}
 	t := NewNullTime(time.Now())
 	db := GetDB()
-	_, err := db.Exec(
-		db.Rebind("update event set started_at = ? where id = ?"),
+
+	tx, err := db.Beginx()
+	if err != nil {
+		return fmt.Errorf("failed to start transaction: %v", err)
+	}
+	defer tx.Rollback()
+
+	_, err = tx.Exec(
+		tx.Rebind("update event set started_at = ? where id = ?"),
 		t, e.ID,
 	)
-	if err == nil {
-		e.StartedAt = t
+	if err != nil {
+		return fmt.Errorf("failed to update event status: %v", err)
 	}
-	return err
+
+	if err := e.addParticipants(tx); err != nil {
+		return fmt.Errorf("failed to add participants: %v", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit the event: %v", err)
+	}
+
+	e.StartedAt = t
+	return nil
 }
 
 func (e *Event) End() error {

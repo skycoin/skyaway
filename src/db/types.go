@@ -5,10 +5,7 @@ import (
 	"encoding/json"
 	"database/sql/driver"
 	"fmt"
-	"log"
 	"bytes"
-
-	"github.com/lib/pq"
 )
 
 type Duration struct {
@@ -72,7 +69,6 @@ func (n NullTime) Value() (driver.Value, error) {
 	if !n.Valid {
 		return nil, nil
 	}
-	log.Printf("should save time %s as %s", n.Time, pq.FormatTimestamp(n.Time))
 	return n.Time, nil
 }
 
