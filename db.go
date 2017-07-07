@@ -1,55 +1,20 @@
-package db
+package skyaway
 
 import (
-	"strings"
 	"fmt"
 	"time"
 	"errors"
 	"math/rand"
 
-	_ "github.com/lib/pq"
 	"database/sql"
 	"github.com/jmoiron/sqlx"
 )
 
-type Config struct {
-	Driver string `json:"driver"`
-	Source string `json:"source"`
+type DB struct {
+	*sqlx.DB
 }
 
-type User struct {
-	ID        int          `json:"id"`
-	UserName  string       `db:"username" json:"username,omitempty"`
-	FirstName string       `db:"first_name" json:"first_name,omitempty"`
-	LastName  string       `db:"last_name" json:"last_name,omitempty"`
-	Enlisted  bool         `json:"enlisted"`
-	Banned    bool         `json:"banned"`
-	Admin     bool         `json:"admin"`
-
-	exists    bool
-}
-
-type Chat struct {
-	ID    int64  `json:"id"`
-	Title string `json:"title"`
-	Type  string `json:"type"`
-}
-
-type Event struct {
-	ID          int          `json:"id"`
-	Duration    Duration     `json:"duration"`
-	ScheduledAt NullTime     `db:"scheduled_at" json:"scheduled_at"`
-	StartedAt   NullTime     `db:"started_at" json:"started_at"`
-	EndedAt     NullTime     `db:"ended_at" json:"ended_at"`
-	Coins       int          `json:"coins"`
-	Surprise    bool         `json:"surpruse"`
-}
-
-var config *Config
-var db *sqlx.DB
-
-func ScheduleEvent(coins int, start time.Time, duration Duration, surprise bool) error {
-	db := GetDB()
+func (db *DB) ScheduleEvent(coins int, start time.Time, duration Duration, surprise bool) error {
 	_, err := db.Exec(db.Rebind(`
 		insert into event (
 			coins, duration, scheduled_at, surprise
@@ -59,9 +24,7 @@ func ScheduleEvent(coins int, start time.Time, duration Duration, surprise bool)
 	return err
 }
 
-func StartNewEvent(coins int, duration Duration) error {
-	db := GetDB()
-
+func (db *DB) StartNewEvent(coins int, duration Duration) error {
 	tx, err := db.Beginx()
 	if err != nil {
 		return fmt.Errorf("failed to start transaction: %v", err)
@@ -126,12 +89,11 @@ func (e *Event) addParticipants(tx *sqlx.Tx) error {
 	return nil
 }
 
-func (e *Event) Start() error {
+func (db *DB) StartEvent(e *Event) error {
 	if e.StartedAt.Valid {
 		return errors.New("already started")
 	}
 	t := NewNullTime(time.Now())
-	db := GetDB()
 
 	tx, err := db.Beginx()
 	if err != nil {
@@ -159,12 +121,11 @@ func (e *Event) Start() error {
 	return nil
 }
 
-func (e *Event) End() error {
+func (db *DB) EndEvent(e *Event) error {
 	if e.EndedAt.Valid {
 		return errors.New("already ended")
 	}
 	t := NewNullTime(time.Now())
-	db := GetDB()
 	_, err := db.Exec(
 		db.Rebind("update event set ended_at = ? where id = ?"),
 		t, e.ID,
@@ -175,10 +136,9 @@ func (e *Event) End() error {
 	return err
 }
 
-func GetCurrentEvent() *Event {
+func (db *DB) GetCurrentEvent() *Event {
 	var event Event
 
-	db := GetDB()
 	err := db.Get(&event, "select * from event where ended_at is null")
 
 	if err == sql.ErrNoRows {
@@ -193,25 +153,21 @@ func GetCurrentEvent() *Event {
 	return &event
 }
 
-func GetDB() *sqlx.DB {
-	if db == nil {
-		if config == nil {
-			panic("please call db.Init() before any other method")
-		}
-
-		var err error
-		db, err = sqlx.Open(config.Driver, config.Source)
-		if err != nil {
-			panic(err)
-		}
+func NewDB(config *DatabaseConfig) (*DB, error) {
+	if config == nil {
+		errors.New("config should not be nil in NewDB()")
 	}
 
-	return db
+	db, err := sqlx.Open(config.Driver, config.Source)
+	if err != nil {
+		return nil, err
+	}
+
+	return &DB{db}, nil
 }
 
-func GetUser(id int) *User {
+func (db *DB) GetUser(id int) *User {
 	var user User
-	db := GetDB()
 	err := db.Get(&user, db.Rebind("select * from botuser where id = ?"), id)
 
 	if err == sql.ErrNoRows {
@@ -226,9 +182,8 @@ func GetUser(id int) *User {
 	return &user
 }
 
-func GetUserByName(name string) *User {
+func (db *DB) GetUserByName(name string) *User {
 	var user User
-	db := GetDB()
 	err := db.Get(&user, db.Rebind("select * from botuser where username = ?"), name)
 
 	if err == sql.ErrNoRows {
@@ -243,9 +198,8 @@ func GetUserByName(name string) *User {
 	return &user
 }
 
-func GetUsers(banned bool) ([]User, error) {
+func (db *DB) GetUsers(banned bool) ([]User, error) {
 	var users []User
-	db := GetDB()
 
 	err := db.Select(&users, db.Rebind("select * from botuser where banned = ? order by username"), banned)
 	if err != nil {
@@ -255,9 +209,8 @@ func GetUsers(banned bool) ([]User, error) {
 	return users, nil
 }
 
-func GetUserCount(banned bool) (int, error) {
+func (db *DB) GetUserCount(banned bool) (int, error) {
 	var count int
-	db := GetDB()
 
 	err := db.Get(&count, db.Rebind("select count(*) from botuser where banned = ?"), banned)
 	if err != nil {
@@ -267,8 +220,7 @@ func GetUserCount(banned bool) (int, error) {
 	return count, nil
 }
 
-func (u *User) Put() error {
-	db := GetDB()
+func (db *DB) PutUser(u *User) error {
 	if u.exists {
 		_, err := db.Exec(db.Rebind(`
 			update botuser
@@ -304,28 +256,4 @@ func (u *User) Put() error {
 		}
 		return err
 	}
-}
-
-func (u *User) NameAndTags() string {
-	var tags []string
-	if u.Banned {
-		tags = append(tags, "banned")
-	}
-	if u.Admin {
-		tags = append(tags, "admin")
-	}
-
-	if len(tags) > 0 {
-		return fmt.Sprintf("%s (%s)", u.UserName, strings.Join(tags, ", "))
-	} else {
-		return u.UserName
-	}
-}
-
-func (u *User) Exists() bool {
-	return u.exists
-}
-
-func Init(newConfig *Config) {
-	config = newConfig
 }

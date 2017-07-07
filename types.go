@@ -1,19 +1,73 @@
-package db
+package skyaway
 
 import (
 	"time"
 	"encoding/json"
 	"database/sql/driver"
 	"fmt"
+	"strings"
 	"bytes"
 )
+
+var nullString = []byte("null")
 
 type Duration struct {
 	time.Duration
 	Valid bool
 }
 
-var nullString = []byte("null")
+func NewDuration(d time.Duration) Duration {
+	return Duration{d, true}
+}
+
+type User struct {
+	ID        int          `json:"id"`
+	UserName  string       `db:"username" json:"username,omitempty"`
+	FirstName string       `db:"first_name" json:"first_name,omitempty"`
+	LastName  string       `db:"last_name" json:"last_name,omitempty"`
+	Enlisted  bool         `json:"enlisted"`
+	Banned    bool         `json:"banned"`
+	Admin     bool         `json:"admin"`
+
+	exists    bool
+}
+
+func (u *User) NameAndTags() string {
+	var tags []string
+	if u.Banned {
+		tags = append(tags, "banned")
+	}
+	if u.Admin {
+		tags = append(tags, "admin")
+	}
+
+	if len(tags) > 0 {
+		return fmt.Sprintf("%s (%s)", u.UserName, strings.Join(tags, ", "))
+	} else {
+		return u.UserName
+	}
+}
+
+func (u *User) Exists() bool {
+	return u.exists
+}
+
+type Chat struct {
+	ID    int64  `json:"id"`
+	Title string `json:"title"`
+	Type  string `json:"type"`
+}
+
+type Event struct {
+	ID          int          `json:"id"`
+	Duration    Duration     `json:"duration"`
+	ScheduledAt NullTime     `db:"scheduled_at" json:"scheduled_at"`
+	StartedAt   NullTime     `db:"started_at" json:"started_at"`
+	EndedAt     NullTime     `db:"ended_at" json:"ended_at"`
+	Coins       int          `json:"coins"`
+	Surprise    bool         `json:"surpruse"`
+}
+
 
 func (d Duration) Value() (driver.Value, error) {
 	if !d.Valid {
