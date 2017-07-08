@@ -31,5 +31,6 @@ Detailed docs are available at <http://godoc.org/github.com/kvap/skyaway>.
 ## Example
 
 1. Build the example with `go build github.com/kvap/skyaway/skyawaybot`.
-2. Create `config.json` in the current director (you can base upon `config.example.json`).
-3. Run `./skyawaybot`.
+2. Set up the database (a schema for postgres is provided in `schema.postgres.sql`).
+3. Create `config.json` in the current director (you can base upon `config.example.json`).
+4. Run `./skyawaybot`.
