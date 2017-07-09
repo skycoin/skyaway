@@ -3,6 +3,7 @@ package skyaway
 import (
 	"log"
 	"fmt"
+	"errors"
 
 	"gopkg.in/telegram-bot-api.v4"
 )
@@ -14,6 +15,7 @@ type Bot struct {
 	commandHandlers map[string]CommandHandler
 	adminCommandHandlers map[string]CommandHandler
 	privateMessageHandlers []MessageHandler
+	rescheduleChan chan int
 }
 
 type Context struct {
@@ -34,6 +36,64 @@ func (bot *Bot) SetCommandHandler(admin bool, command string, handler CommandHan
 
 func (bot *Bot) AddPrivateMessageHandler(handler MessageHandler) {
 	bot.privateMessageHandlers = append(bot.privateMessageHandlers, handler)
+}
+
+var EventExists = errors.New("already have a current event")
+var EventDoesNotExist = errors.New("no current event")
+
+// Starts the current event immediately and return the event, if it exists.
+// Returns `EventDoesNotExist` otherwise.
+func (bot *Bot) StartCurrentEvent() (*Event, error) {
+	event := bot.db.GetCurrentEvent()
+	if event == nil {
+		return nil, EventDoesNotExist
+	}
+
+	err := bot.db.StartEvent(event)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start current event: %v", err)
+	}
+
+	return event, nil
+}
+
+// Ends the current event immediately and return the event, if it exists.
+// Returns `EventDoesNotExist` otherwise.
+func (bot *Bot) EndCurrentEvent() (*Event, error) {
+	event := bot.db.GetCurrentEvent()
+	if event == nil {
+		return nil, EventDoesNotExist
+	}
+
+	err := bot.db.EndEvent(event)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start current event: %v", err)
+	}
+
+	return event, nil
+}
+
+// Starts an event immediately with given number of `coins` and `duration`.
+// Returns the current event and `EventExists` error if there already is a
+// current event (scheduled or started). Returns the new event if started
+// successfully
+func (bot *Bot) StartNewEvent(coins int, dur Duration) (*Event, error) {
+	event := bot.db.GetCurrentEvent()
+	if event != nil {
+		return event, EventExists
+	}
+
+	err := bot.db.StartNewEvent(coins, bot.config.EventDuration)
+	if err != nil {
+		return nil, fmt.Errorf("failed to start event: %v", err)
+	}
+
+	event = bot.db.GetCurrentEvent()
+	if event == nil {
+		return nil, fmt.Errorf("event did not start due to reasons unknown")
+	}
+
+	return event, nil
 }
 
 func (bot *Bot) enableUser(u *User) ([]string, error) {
@@ -316,6 +376,12 @@ func (bot *Bot) handleUpdate(update *tgbotapi.Update) error {
 	return bot.handleMessage(&ctx)
 }
 
+func (bot *Bot) AnnounceEventWithTitle(event *Event, title string) error {
+	md := formatEventAsMarkdown(event, true)
+	md = fmt.Sprintf("*%s*\n%s", title, md)
+	return bot.Send(&Context{}, "yell", "markdown", md)
+}
+
 func (bot *Bot) Start() error {
 	u := tgbotapi.NewUpdate(0)
 	u.Timeout = 60
@@ -324,6 +390,8 @@ func (bot *Bot) Start() error {
 	if err != nil {
 		return fmt.Errorf("failed to create telegram updates channel: %v", err)
 	}
+
+	go bot.maintain()
 
 	for update := range updates {
 		if err := bot.handleUpdate(&update); err != nil {

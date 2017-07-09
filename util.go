@@ -61,9 +61,15 @@ func formatEventAsMarkdown(event *Event, public bool) string {
 			niceDuration(time.Since(event.EndedAt.Time)),
 		)
 	} else {
+		var endsAt time.Time
+		if event.StartedAt.Valid {
+			endsAt = event.StartedAt.Time.Add(event.Duration.Duration)
+		} else {
+			endsAt = event.ScheduledAt.Time.Add(event.Duration.Duration)
+		}
 		fields = appendField(fields, "duration", "%s (ends in %s)",
 			niceDuration(event.Duration.Duration),
-			niceDuration(time.Since(event.EndedAt.Time)),
+			niceDuration(time.Until(endsAt)),
 		)
 	}
 

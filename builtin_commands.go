@@ -173,21 +173,16 @@ func (bot *Bot) handleCommandStartEvent(ctx *Context, command, args string) erro
 		return bot.Reply(ctx, "malformed coins format: use an integer number")
 	}
 
-	haveCurrent, err := bot.complainIfHaveCurrentEvent(ctx)
-	if haveCurrent || err != nil {
+	event, err := bot.StartNewEvent(coins, bot.config.EventDuration)
+	if err == EventExists {
+		return bot.ReplyAboutEvent(ctx, "already have an event", event)
+	}
+	if err != nil {
 		return err
 	}
 
-	err = bot.db.StartNewEvent(coins, bot.config.EventDuration)
-	if err != nil {
-		return fmt.Errorf("failed to start event: %v", err)
-	}
-
-	event := bot.db.GetCurrentEvent()
-	if event == nil {
-		return fmt.Errorf("event did not start due to reasons unknown")
-	}
-
+	bot.AnnounceEventWithTitle(event, "Event has started!")
+	bot.Reschedule()
 	return bot.ReplyAboutEvent(ctx, "event started", event)
 }
 
@@ -209,6 +204,8 @@ func (bot *Bot) handleCommandCancelEvent(ctx *Context, command, args string) err
 		return fmt.Errorf("failed to cancel event: %v", err)
 	}
 
+	bot.AnnounceEventWithTitle(event, "The scheduled event has been cancelled")
+	bot.Reschedule()
 	return bot.ReplyAboutEvent(ctx, "event cancelled", event)
 }
 
@@ -230,6 +227,8 @@ func (bot *Bot) handleCommandStopEvent(ctx *Context, command, args string) error
 		return fmt.Errorf("failed to stop event: %v", err)
 	}
 
+	bot.AnnounceEventWithTitle(event, "Event has ended!")
+	bot.Reschedule()
 	return bot.ReplyAboutEvent(ctx, "event stopped", event)
 }
 
@@ -328,6 +327,10 @@ func (bot *Bot) handleCommandScheduleEvent(ctx *Context, command, args string) e
 		return fmt.Errorf("event was not scheduled due to reasons unknown")
 	}
 
+	if !surprise {
+		bot.AnnounceEventWithTitle(event, "A new event has been scheduled!")
+	}
+	bot.Reschedule()
 	return bot.ReplyAboutEvent(ctx, "event scheduled", event)
 }
 
@@ -339,6 +342,7 @@ func (bot *Bot) handleCommandAnnounce(ctx *Context, command, args string) error 
 	if err := bot.Send(ctx, "yell", "text", msg); err != nil {
 		return fmt.Errorf("failed to announce: %v", err)
 	}
+
 	return bot.Reply(ctx, "done")
 }
 

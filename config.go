@@ -11,4 +11,5 @@ type Config struct {
 	ChatID        int64          `json:"chat_id"`
 	Database      DatabaseConfig `json:"database"`
 	EventDuration Duration       `json:"event_duration"`
+	AnnounceEvery Duration       `json:"announce_every"`
 }

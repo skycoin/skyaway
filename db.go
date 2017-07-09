@@ -27,7 +27,7 @@ func (db *DB) ScheduleEvent(coins int, start time.Time, duration Duration, surpr
 func (db *DB) StartNewEvent(coins int, duration Duration) error {
 	tx, err := db.Beginx()
 	if err != nil {
-		return fmt.Errorf("failed to start transaction: %v", err)
+		return fmt.Errorf("failed to begin transaction: %v", err)
 	}
 	defer tx.Rollback()
 
@@ -89,6 +89,42 @@ func (e *Event) addParticipants(tx *sqlx.Tx) error {
 	return nil
 }
 
+func (db *DB) CoinsClaimed(e *Event) (int, error) {
+	var coins int
+	err := db.Get(&coins, db.Rebind(`
+		select sum(coins)
+		from participant
+		where event_id = ? and claimed_at is not null`),
+		e.ID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count claimed coins: %v", err)
+	}
+	return coins, nil
+}
+
+func (db *DB) CoinsUnclaimed(e *Event) (int, error) {
+	claimed, err := db.CoinsClaimed(e)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count unclaimed coins: %v", err)
+	}
+	return e.Coins - claimed, nil
+}
+
+func (db *DB) ClaimersLeft(e *Event) (int, error) {
+	var claimers int
+	err := db.Get(&claimers, db.Rebind(`
+		select count(user_id)
+		from participant
+		where event_id = ? and claimed_at is null`),
+		e.ID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("failed to count claimers: %v", err)
+	}
+	return claimers, nil
+}
+
 func (db *DB) StartEvent(e *Event) error {
 	if e.StartedAt.Valid {
 		return errors.New("already started")
@@ -97,7 +133,7 @@ func (db *DB) StartEvent(e *Event) error {
 
 	tx, err := db.Beginx()
 	if err != nil {
-		return fmt.Errorf("failed to start transaction: %v", err)
+		return fmt.Errorf("failed to begin transaction: %v", err)
 	}
 	defer tx.Rollback()
 
