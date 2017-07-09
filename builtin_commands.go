@@ -3,11 +3,13 @@ package skyaway
 import (
 	"time"
 	"fmt"
+	"log"
 	"strconv"
 	"strings"
 	"encoding/json"
 
 	"github.com/bcampbell/fuzzytime"
+	"github.com/skycoin/skycoin/src/cipher"
 	"gopkg.in/telegram-bot-api.v4"
 )
 
@@ -360,6 +362,54 @@ func (bot *Bot) handleCommandAnnounceEvent(ctx *Context, command, args string) e
 	return bot.Reply(ctx, "done")
 }
 
+func (bot *Bot) handlePrivateMessageFallback(ctx *Context, text string) (bool, error) {
+	event := bot.db.GetCurrentEvent()
+
+	started := event != nil && event.StartedAt.Valid
+	canTellWhen := event != nil && !event.Surprise
+
+	if !started {
+		if canTellWhen {
+			return true, bot.Reply(ctx, fmt.Sprintf(
+				"event has not started yet, come back in %s",
+				niceDuration(time.Until(event.ScheduledAt.Time)),
+			))
+		} else {
+			return true, bot.Reply(ctx, "event has not started yet, come back later")
+		}
+	}
+
+	coins, err := bot.db.GetCoinsToClaim(ctx.User, event)
+
+	if ctx.User.Banned || err == NotParticipating {
+		return true, bot.Reply(ctx, "you are not eligible to claim coins in this event")
+	}
+
+	if err == AlreadyClaimed {
+		return true, bot.Reply(ctx, "you have already claimed your coins in this event")
+	}
+
+	if err != nil {
+		log.Printf("failed to get the number of coins to claim: %v", err)
+		return true, bot.Reply(ctx, "sorry, something went wrong")
+	}
+
+	addr, err := cipher.DecodeBase58Address(text)
+	if err != nil {
+		log.Printf("not a skycoin address: %v", err)
+		return true, bot.Reply(ctx, "please send your skycoin address to get coins")
+	}
+
+	if err := bot.db.ClaimCoins(ctx.User, event); err != nil {
+		log.Printf("failed to store that the coins have been claimed: %v", err)
+		return true, bot.Reply(ctx, "sorry, something went wrong")
+	}
+
+	// TODO: implement skycoin sending
+	log.Printf("send %d coins to %s", coins, addr.String())
+	return true, bot.Reply(ctx, fmt.Sprintf("%d coins are on the way to your wallet", coins))
+}
+
 func (bot *Bot) setBuiltInCommandHandlers() {
 	bot.SetCommandHandler(false, "help",             (*Bot).handleCommandHelp)
 	bot.SetCommandHandler(false, "start",            (*Bot).handleCommandStart)
@@ -382,4 +432,5 @@ func (bot *Bot) setBuiltInCommandHandlers() {
 		banned := true
 		return bot.handleCommandUsersParsed(ctx, banned)
 	})
+	bot.AddPrivateMessageHandler((*Bot).handlePrivateMessageFallback)
 }

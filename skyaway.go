@@ -182,7 +182,8 @@ func (bot *Bot) handlePrivateMessage(ctx *Context) error {
 		return nil
 	}
 
-	for _, handler := range bot.privateMessageHandlers {
+	for i := len(bot.privateMessageHandlers) - 1; i >= 0; i-- {
+		handler := bot.privateMessageHandlers[i]
 		next, err := handler(bot, ctx, ctx.message.Text)
 		if err != nil {
 			return fmt.Errorf("private message handler failed: %v", err)

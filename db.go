@@ -245,6 +245,48 @@ func (db *DB) GetUsers(banned bool) ([]User, error) {
 	return users, nil
 }
 
+var NotParticipating = errors.New("the user is not participating in the event")
+var AlreadyClaimed = errors.New("the user has already claimed coins in the event")
+
+func (db *DB) ClaimCoins(user *User, event *Event) error {
+	_, err := db.Exec(db.Rebind(`
+		update participant
+		set claimed_at = now()
+		where
+			user_id = ?
+			and event_id = ?`),
+		user.ID, event.ID,
+	)
+	return err
+}
+
+func (db *DB) GetCoinsToClaim(user *User, event *Event) (int, error) {
+	var coins int
+	var claimedAt NullTime
+	err := db.QueryRowx(db.Rebind(`
+		select coins, claimed_at
+		from participant
+		where
+			user_id = ?
+			and event_id = ?`),
+		user.ID, event.ID,
+	).Scan(&coins, &claimedAt)
+
+	if err == sql.ErrNoRows {
+		return 0, NotParticipating
+	}
+
+	if err != nil {
+		return 0, err
+	}
+
+	if claimedAt.Valid {
+		return coins, AlreadyClaimed
+	}
+
+	return coins, nil
+}
+
 func (db *DB) GetUserCount(banned bool) (int, error) {
 	var count int
 
