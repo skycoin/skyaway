@@ -4,6 +4,7 @@ import (
 	"log"
 	"fmt"
 	"errors"
+	"strings"
 
 	"gopkg.in/telegram-bot-api.v4"
 )
@@ -15,6 +16,7 @@ type Bot struct {
 	commandHandlers map[string]CommandHandler
 	adminCommandHandlers map[string]CommandHandler
 	privateMessageHandlers []MessageHandler
+	groupMessageHandlers []MessageHandler
 	rescheduleChan chan int
 }
 
@@ -36,6 +38,10 @@ func (bot *Bot) SetCommandHandler(admin bool, command string, handler CommandHan
 
 func (bot *Bot) AddPrivateMessageHandler(handler MessageHandler) {
 	bot.privateMessageHandlers = append(bot.privateMessageHandlers, handler)
+}
+
+func (bot *Bot) AddGroupMessageHandler(handler MessageHandler) {
+	bot.groupMessageHandlers = append(bot.groupMessageHandlers, handler)
 }
 
 var EventExists = errors.New("already have a current event")
@@ -238,11 +244,28 @@ func (bot *Bot) handleUserLeft(ctx *Context, user *tgbotapi.User) error {
 	return nil
 }
 
-func (bot *Bot) handleUserActivity(ctx *Context, u *tgbotapi.User) error {
-	if u.ID == bot.telegram.Self.ID {
-		return nil
+func (bot *Bot) removeMyName(text string) (string, bool) {
+	var removed bool
+	var words []string
+	for _, word := range strings.Fields(text) {
+		if word == "@" + bot.telegram.Self.UserName {
+			removed = true
+			continue
+		}
+		words = append(words, word)
 	}
-	return nil
+	return strings.Join(words, " "), removed
+}
+
+func (bot *Bot) isReplyToMe(ctx *Context) bool {
+	if re := ctx.message.ReplyToMessage; re != nil {
+		if u := re.From; u != nil {
+			if u.ID == bot.telegram.Self.ID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (bot *Bot) handleGroupMessage(ctx *Context) error {
@@ -257,12 +280,23 @@ func (bot *Bot) handleGroupMessage(ctx *Context) error {
 			gerr = err
 		}
 	}
-	if u := ctx.message.From; u != nil {
-		if err := bot.handleUserActivity(ctx, u); u != nil {
-			gerr = err
+
+	if ctx.User != nil {
+		msgWithoutName, mentioned := bot.removeMyName(ctx.message.Text)
+
+		if mentioned || bot.isReplyToMe(ctx) {
+			for i := len(bot.groupMessageHandlers) - 1; i >= 0; i-- {
+				handler := bot.groupMessageHandlers[i]
+				next, err := handler(bot, ctx, msgWithoutName)
+				if err != nil {
+					return fmt.Errorf("group message handler failed: %v", err)
+				}
+				if !next {
+					break
+				}
+			}
 		}
 	}
-	//log.Printf("group message from %s: %s", ctx.Message.From.UserName, ctx.Message.Text)
 	return gerr
 }
 
@@ -298,6 +332,17 @@ func (bot *Bot) ReplyAboutEvent(ctx *Context, text string, event *Event) error {
 	return bot.Send(ctx, "reply", "markdown", fmt.Sprintf(
 		"%s\n%s", text, formatEventAsMarkdown(event, false),
 	))
+}
+
+func (bot *Bot) Ask(ctx *Context, text string) error {
+	msg := tgbotapi.NewMessage(ctx.message.Chat.ID, text)
+	msg.ReplyMarkup = tgbotapi.ForceReply{
+		ForceReply: true,
+		Selective: true,
+	}
+	msg.ReplyToMessageID = ctx.message.MessageID
+	_, err := bot.telegram.Send(msg)
+	return err
 }
 
 func (bot *Bot) Reply(ctx *Context, text string) error {
@@ -401,4 +446,9 @@ func (bot *Bot) Start() error {
 	}
 	log.Printf("stopped")
 	return nil
+}
+
+func (bot *Bot) SendCoins(coins int, address string) error {
+	log.Printf("sending %d coins to %s", coins, address)
+	return fmt.Errorf("not implemented")
 }

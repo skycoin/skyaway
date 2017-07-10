@@ -362,7 +362,7 @@ func (bot *Bot) handleCommandAnnounceEvent(ctx *Context, command, args string) e
 	return bot.Reply(ctx, "done")
 }
 
-func (bot *Bot) handlePrivateMessageFallback(ctx *Context, text string) (bool, error) {
+func (bot *Bot) handleDirectMessageFallback(ctx *Context, text string) (bool, error) {
 	event := bot.db.GetCurrentEvent()
 
 	started := event != nil && event.StartedAt.Valid
@@ -397,7 +397,7 @@ func (bot *Bot) handlePrivateMessageFallback(ctx *Context, text string) (bool, e
 	addr, err := cipher.DecodeBase58Address(text)
 	if err != nil {
 		log.Printf("not a skycoin address: %v", err)
-		return true, bot.Reply(ctx, "please send your skycoin address to get coins")
+		return true, bot.Ask(ctx, "please send your skycoin address to get coins")
 	}
 
 	if err := bot.db.ClaimCoins(ctx.User, event); err != nil {
@@ -405,9 +405,11 @@ func (bot *Bot) handlePrivateMessageFallback(ctx *Context, text string) (bool, e
 		return true, bot.Reply(ctx, "sorry, something went wrong")
 	}
 
-	// TODO: implement skycoin sending
-	log.Printf("send %d coins to %s", coins, addr.String())
-	return true, bot.Reply(ctx, fmt.Sprintf("%d coins are on the way to your wallet", coins))
+	if err := bot.SendCoins(coins, addr.String()); err != nil {
+		log.Printf("failed to send %d coins to %s: %v", coins, addr.String(), err)
+		return true, bot.Reply(ctx, "sorry, something went wrong")
+	}
+	return true, bot.Reply(ctx, fmt.Sprintf("some coins are on the way to your wallet"))
 }
 
 func (bot *Bot) setBuiltInCommandHandlers() {
@@ -432,5 +434,6 @@ func (bot *Bot) setBuiltInCommandHandlers() {
 		banned := true
 		return bot.handleCommandUsersParsed(ctx, banned)
 	})
-	bot.AddPrivateMessageHandler((*Bot).handlePrivateMessageFallback)
+	bot.AddPrivateMessageHandler((*Bot).handleDirectMessageFallback)
+	bot.AddGroupMessageHandler((*Bot).handleDirectMessageFallback)
 }
