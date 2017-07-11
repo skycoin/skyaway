@@ -59,12 +59,15 @@ func (bot *Bot) StartCurrentEvent() (*Event, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to start current event: %v", err)
 	}
+	defer bot.Reschedule()
+
+	bot.AnnounceEventWithTitle(event, "Event has started!")
 
 	return event, nil
 }
 
-// Ends the current event immediately and return the event, if it exists.
-// Returns `EventDoesNotExist` otherwise.
+// Unconditionally ends the current event immediately and return the event, if
+// it exists.  Returns `EventDoesNotExist` otherwise.
 func (bot *Bot) EndCurrentEvent() (*Event, error) {
 	event := bot.db.GetCurrentEvent()
 	if event == nil {
@@ -73,10 +76,55 @@ func (bot *Bot) EndCurrentEvent() (*Event, error) {
 
 	err := bot.db.EndEvent(event)
 	if err != nil {
-		return nil, fmt.Errorf("failed to start current event: %v", err)
+		return nil, fmt.Errorf("failed to end current event: %v", err)
+	}
+	defer bot.Reschedule()
+
+	switch {
+		case event.StartedAt.Valid:
+			bot.AnnounceEventWithTitle(event, "Event has ended!")
+		case event.ScheduledAt.Valid:
+			bot.AnnounceEventWithTitle(event, "The scheduled event has been cancelled")
+		default:
+			log.Printf("the ended event was neither started, nor scheduled")
 	}
 
 	return event, nil
+}
+
+// Ends the current event immediately and return the event, if it exists and
+// needs to be ended (no more coins or claimers).
+// Returns err == `EventDoesNotExist` if no current event.
+func (bot *Bot) EndCurrentEventIfNeeded() (event *Event, ended bool, err error) {
+	event = bot.db.GetCurrentEvent()
+	if event == nil {
+		err = EventDoesNotExist
+		return
+	}
+
+	var coins, claimers int
+
+	if coins, err = bot.db.CoinsUnclaimed(event); err != nil {
+		return
+	}
+
+	if claimers, err = bot.db.ClaimersLeft(event); err != nil {
+		return
+	}
+
+	if coins > 0 && claimers > 0 {
+		return
+	}
+
+	err = bot.db.EndEvent(event)
+	if err != nil {
+		err = fmt.Errorf("failed to end current event: %v", err)
+		return
+	}
+	bot.AnnounceEventWithTitle(event, "Event has ended!")
+	defer bot.Reschedule()
+	ended = true
+	return
 }
 
 // Starts an event immediately with given number of `coins` and `duration`.
@@ -93,12 +141,14 @@ func (bot *Bot) StartNewEvent(coins int, dur Duration) (*Event, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to start event: %v", err)
 	}
+	defer bot.Reschedule()
 
 	event = bot.db.GetCurrentEvent()
 	if event == nil {
 		return nil, fmt.Errorf("event did not start due to reasons unknown")
 	}
 
+	bot.AnnounceEventWithTitle(event, "Event has started!")
 	return event, nil
 }
 

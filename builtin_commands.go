@@ -183,8 +183,6 @@ func (bot *Bot) handleCommandStartEvent(ctx *Context, command, args string) erro
 		return err
 	}
 
-	bot.AnnounceEventWithTitle(event, "Event has started!")
-	bot.Reschedule()
 	return bot.ReplyAboutEvent(ctx, "event started", event)
 }
 
@@ -202,12 +200,10 @@ func (bot *Bot) handleCommandCancelEvent(ctx *Context, command, args string) err
 		)
 	}
 
-	if err := bot.db.EndEvent(event); err != nil {
-		return fmt.Errorf("failed to cancel event: %v", err)
+	if _, err := bot.EndCurrentEvent(); err != nil {
+		return fmt.Errorf("failed to cancel the event: %v", err)
 	}
 
-	bot.AnnounceEventWithTitle(event, "The scheduled event has been cancelled")
-	bot.Reschedule()
 	return bot.ReplyAboutEvent(ctx, "event cancelled", event)
 }
 
@@ -225,12 +221,10 @@ func (bot *Bot) handleCommandStopEvent(ctx *Context, command, args string) error
 		)
 	}
 
-	if err := bot.db.EndEvent(event); err != nil {
-		return fmt.Errorf("failed to stop event: %v", err)
+	if _, err := bot.EndCurrentEvent(); err != nil {
+		return fmt.Errorf("failed to stop the event: %v", err)
 	}
 
-	bot.AnnounceEventWithTitle(event, "Event has ended!")
-	bot.Reschedule()
 	return bot.ReplyAboutEvent(ctx, "event stopped", event)
 }
 
@@ -328,11 +322,11 @@ func (bot *Bot) handleCommandScheduleEvent(ctx *Context, command, args string) e
 	if event == nil {
 		return fmt.Errorf("event was not scheduled due to reasons unknown")
 	}
+	defer bot.Reschedule()
 
 	if !surprise {
 		bot.AnnounceEventWithTitle(event, "A new event has been scheduled!")
 	}
-	bot.Reschedule()
 	return bot.ReplyAboutEvent(ctx, "event scheduled", event)
 }
 
@@ -404,6 +398,8 @@ func (bot *Bot) handleDirectMessageFallback(ctx *Context, text string) (bool, er
 		log.Printf("failed to store that the coins have been claimed: %v", err)
 		return true, bot.Reply(ctx, "sorry, something went wrong")
 	}
+
+	defer bot.EndCurrentEventIfNeeded()
 
 	if err := bot.SendCoins(coins, addr.String()); err != nil {
 		log.Printf("failed to send %d coins to %s: %v", coins, addr.String(), err)
