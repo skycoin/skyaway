@@ -401,7 +401,7 @@ func (bot *Bot) handleDirectMessageFallback(ctx *Context, text string) (bool, er
 
 	defer bot.EndCurrentEventIfNeeded()
 
-	if err := bot.SendCoins(coins, addr.String()); err != nil {
+	if err := bot.SendCoins(uint64(coins), addr.String()); err != nil {
 		log.Printf("failed to send %d coins to %s: %v", coins, addr.String(), err)
 		return true, bot.Reply(ctx, "sorry, something went wrong")
 	}

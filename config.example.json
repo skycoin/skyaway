@@ -8,5 +8,11 @@
 		"source": "dbname=skyaway user=skyaway"
 	},
 	"event_duration": "1h",
-	"announce_every": "10s"
+	"announce_every": "10s",
+	"wallet": {
+		"rpc": "127.0.0.1:6430",
+		"address": "some-base58-address",
+		"public_key": "the-public-key",
+		"secret_key": "the-secret-key"
+	}
 }

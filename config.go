@@ -5,6 +5,13 @@ type DatabaseConfig struct {
 	Source string `json:"source"`
 }
 
+type WalletConfig struct {
+	RPC       string `json:"rpc"`
+	Address   string `json:"address"`
+	PublicKey string `json:"public_key"`
+	SecretKey string `json:"secret_key"`
+}
+
 type Config struct {
 	Debug         bool           `json:"debug"`
 	Token         string         `json:"token"`
@@ -12,4 +19,5 @@ type Config struct {
 	Database      DatabaseConfig `json:"database"`
 	EventDuration Duration       `json:"event_duration"`
 	AnnounceEvery Duration       `json:"announce_every"`
+	Wallet        WalletConfig   `json:"wallet"`
 }

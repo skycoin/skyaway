@@ -497,8 +497,3 @@ func (bot *Bot) Start() error {
 	log.Printf("stopped")
 	return nil
 }
-
-func (bot *Bot) SendCoins(coins int, address string) error {
-	log.Printf("sending %d coins to %s", coins, address)
-	return fmt.Errorf("not implemented")
-}
