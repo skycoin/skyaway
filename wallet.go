@@ -214,7 +214,6 @@ func (bot *Bot) SendCoins(coins uint64, address string) error {
 	log.Printf("transaction: %s", d)
 	rawtx := hex.EncodeToString(d)
 	log.Printf("raw transaction: %s", rawtx)
-	return errors.New("not implemented")
 
 	txid, err := broadcastTx(bot.config.Wallet.RPC, rawtx)
 	log.Printf("txid: %s", txid)
