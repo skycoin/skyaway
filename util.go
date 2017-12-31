@@ -1,9 +1,10 @@
 package skyaway
 
 import (
-	"time"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func niceDuration(d time.Duration) string {
@@ -13,8 +14,8 @@ func niceDuration(d time.Duration) string {
 
 	var hours, minutes, seconds int
 	seconds = int(d.Seconds())
-	hours, seconds = seconds / 3600, seconds % 3600
-	minutes, seconds = seconds / 60, seconds % 60
+	hours, seconds = seconds/3600, seconds%3600
+	minutes, seconds = seconds/60, seconds%60
 
 	if hours > 0 {
 		if minutes > 0 {
@@ -80,3 +81,19 @@ func formatEventAsMarkdown(event *Event, public bool) string {
 	return strings.Join(fields, "\n")
 }
 
+func parseDuration(args string) (time.Duration, error) {
+	hours, err := strconv.ParseFloat(args, 64)
+	if err == nil {
+		return time.Second * time.Duration(hours*3600), nil
+	}
+
+	return time.ParseDuration(args)
+}
+
+func (bot *Bot) SetCommandHandler(admin bool, command string, handler CommandHandler) {
+	if admin {
+		bot.adminCommandHandlers[command] = handler
+	} else {
+		bot.commandHandlers[command] = handler
+	}
+}

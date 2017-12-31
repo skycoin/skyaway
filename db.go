@@ -1,18 +1,22 @@
 package skyaway
 
 import (
-	"fmt"
-	"time"
 	"errors"
+	"fmt"
 	"math/rand"
+	"time"
 
 	"database/sql"
+
 	"github.com/jmoiron/sqlx"
 )
 
 type DB struct {
 	*sqlx.DB
 }
+
+var NotParticipating = errors.New("the user is not participating in the event")
+var AlreadyClaimed = errors.New("the user has already claimed coins in the event")
 
 func (db *DB) ScheduleEvent(coins int, start time.Time, duration Duration, surprise bool) error {
 	_, err := db.Exec(db.Rebind(`
@@ -42,7 +46,7 @@ func (db *DB) StartNewEvent(coins int, duration Duration) error {
 	}
 
 	var event Event
-	if err = tx.Get(&event, "select * from event where ended_at is null"); err != nil {
+	if err = tx.Get(&event, "SELECT * FROM event WHERE ended_at IS NULL"); err != nil {
 		return fmt.Errorf("event inserted, but could not be found immediatly after: %v", err)
 	}
 
@@ -58,29 +62,29 @@ func (db *DB) StartNewEvent(coins int, duration Duration) error {
 }
 
 func (e *Event) addParticipants(tx *sqlx.Tx) error {
-	var ids []int
-	err := tx.Select(&ids, "select id from botuser where not banned and enlisted")
+	var users []TempUser
+	err := tx.Select(&users, "SELECT id, username FROM botuser WHERE NOT banned AND enlisted")
 	if err != nil {
 		return fmt.Errorf("failed to select eligible users for coin distribution: %v", err)
 	}
 
-	if len(ids) == 0 {
+	if len(users) == 0 {
 		return nil
 	}
 
-	coinsPerUser := e.Coins / len(ids)
+	coinsPerUser := e.Coins / len(users)
 	volatility := 0
-	if e.Coins % len(ids) != 0 {
+	if e.Coins%len(users) != 0 {
 		volatility = 1
 	}
 
-	for _, uid := range ids {
-		coins := coinsPerUser + rand.Intn(volatility + 1)
+	for _, user := range users {
+		coins := coinsPerUser + rand.Intn(volatility+1)
 		_, err := tx.Exec(tx.Rebind(`
 			insert into participant (
-				event_id, user_id, coins
-			) values (?, ?, ?)`),
-			e.ID, uid, coins,
+				event_id, user_id, username, coins
+			) values (?, ?, ?, ?)`),
+			e.ID, user.ID, user.UserName, coins,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to add user to event participants: %v", err)
@@ -175,7 +179,24 @@ func (db *DB) EndEvent(e *Event) error {
 func (db *DB) GetCurrentEvent() *Event {
 	var event Event
 
-	err := db.Get(&event, "select * from event where ended_at is null")
+	err := db.Get(&event, "SELECT * FROM event WHERE ended_at IS NULL")
+
+	if err == sql.ErrNoRows {
+		return nil
+	}
+
+	if err != nil {
+		panic(err)
+		return nil
+	}
+
+	return &event
+}
+
+func (db *DB) GetLastEvent() *Event {
+	var event Event
+
+	err := db.Get(&event, "SELECT * FROM event WHERE ended_at IS NOT NULL AND started_at IS NOT NULL ORDER BY id DESC LIMIT 1")
 
 	if err == sql.ErrNoRows {
 		return nil
@@ -193,19 +214,16 @@ func NewDB(config *DatabaseConfig) (*DB, error) {
 	if config == nil {
 		errors.New("config should not be nil in NewDB()")
 	}
-
 	db, err := sqlx.Open(config.Driver, config.Source)
 	if err != nil {
 		return nil, err
 	}
-
 	return &DB{db}, nil
 }
 
 func (db *DB) GetUser(id int) *User {
 	var user User
-	err := db.Get(&user, db.Rebind("select * from botuser where id = ?"), id)
-
+	err := db.Get(&user, db.Rebind("select * from botuser where id=?"), id)
 	if err == sql.ErrNoRows {
 		return nil
 	}
@@ -220,7 +238,25 @@ func (db *DB) GetUser(id int) *User {
 
 func (db *DB) GetUserByName(name string) *User {
 	var user User
-	err := db.Get(&user, db.Rebind("select * from botuser where username = ?"), name)
+	err := db.Get(&user, db.Rebind("select * from botuser where username=?"), name)
+
+	if err == sql.ErrNoRows {
+		return nil
+	}
+
+	if err != nil {
+		return nil
+	}
+
+	user.exists = true
+	return &user
+}
+
+func (db *DB) GetUserByNameOrId(identifier string) *User {
+	var user User
+	var err error
+
+	err = db.Get(&user, db.Rebind("select * from botuser where username=? or id=?"), identifier, identifier)
 
 	if err == sql.ErrNoRows {
 		return nil
@@ -245,8 +281,17 @@ func (db *DB) GetUsers(banned bool) ([]User, error) {
 	return users, nil
 }
 
-var NotParticipating = errors.New("the user is not participating in the event")
-var AlreadyClaimed = errors.New("the user has already claimed coins in the event")
+func (db *DB) GetWinners(eventID int) ([]Participant, error) {
+	var winners []Participant
+
+	err := db.Select(&winners, db.Rebind("Select * from participant where event_id=?"), eventID)
+
+	if err != nil {
+		return []Participant{}, nil
+	}
+
+	return winners, nil
+}
 
 func (db *DB) ClaimCoins(user *User, event *Event) error {
 	_, err := db.Exec(db.Rebind(`

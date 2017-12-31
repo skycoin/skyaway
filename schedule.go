@@ -1,12 +1,13 @@
 package skyaway
 
 import (
-	"time"
-	"log"
 	"fmt"
+	"log"
+	"time"
 )
 
 type task int
+
 const (
 	nothing task = iota
 	announceEventStart
@@ -26,10 +27,11 @@ func (bot *Bot) schedule() (task, time.Time) {
 		return endEvent, event.StartedAt.Time.Add(event.Duration.Duration)
 	} else if event.ScheduledAt.Valid {
 		return startEvent, event.ScheduledAt.Time
-	} else {
-		log.Print("The current event is not scheduled, not started and not ended. That should not have happened.")
-		return nothing, time.Time{}
 	}
+
+	log.Print("The current event is not scheduled, not started and not ended. That should not have happened.")
+	return nothing, time.Time{}
+
 }
 
 // Returns a more detailed version than `schedule()`
@@ -49,13 +51,13 @@ func (bot *Bot) subSchedule() (task, time.Time) {
 
 	nearFuture := future.Add(-announcements * every)
 	switch tsk {
-		case startEvent:
-			return announceEventStart, nearFuture
-		case endEvent:
-			return announceEventEnd, nearFuture
-		default:
-			log.Print("unsupported task to subSchedule")
-			return nothing, time.Time{}
+	case startEvent:
+		return announceEventStart, nearFuture
+	case endEvent:
+		return announceEventEnd, nearFuture
+	default:
+		log.Print("unsupported task to subSchedule")
+		return nothing, time.Time{}
 	}
 }
 
@@ -68,50 +70,51 @@ func (bot *Bot) perform(tsk task) {
 
 	noctx := &Context{}
 	switch tsk {
-		case announceEventStart:
-			if event.Surprise {
-				log.Printf("not announcing the future start of a surprise event")
-				break
-			}
-			log.Print("announcing the event future start")
-			if err := bot.AnnounceEventWithTitle(event, "Event is scheduled"); err != nil {
-				log.Printf("failed to announce event future start: %v", err)
-			}
-		case announceEventEnd:
-			log.Print("announcing the event future end")
-			if err := bot.AnnounceEventWithTitle(event, "Event is ongoing"); err != nil {
-				log.Printf("failed to announce event future end: %v", err)
-			}
-		case startEvent:
-			log.Print("starting the event")
+	case announceEventStart:
+		if event.Surprise {
+			log.Printf("not announcing the future start of a surprise event")
+			break
+		}
 
-			startedEvent, err := bot.StartCurrentEvent()
-			if err != nil {
-				log.Printf("failed to start event: %v", err)
-				break
-			}
+		log.Print("announcing the event future start")
+		if err := bot.AnnounceEventWithTitle(event, "Event is scheduled"); err != nil {
+			log.Printf("failed to announce event future start: %v", err)
+		}
+	case announceEventEnd:
+		log.Print("announcing the event future end")
+		if err := bot.AnnounceEventWithTitle(event, "Event is ongoing"); err != nil {
+			log.Printf("failed to announce event future end: %v", err)
+		}
+	case startEvent:
+		log.Print("starting the event")
 
-			md := formatEventAsMarkdown(startedEvent, true)
-			md = fmt.Sprintf("*%s*\n%s", "Event has started!", md)
-			if err := bot.Send(noctx, "yell", "markdown", md); err != nil {
-				log.Printf("failed to announce event started: %v", err)
-			}
-		case endEvent:
-			log.Print("ending the event")
+		startedEvent, err := bot.StartCurrentEvent()
+		if err != nil {
+			log.Printf("failed to start event: %v", err)
+			break
+		}
 
-			endedEvent, err := bot.EndCurrentEvent()
-			if err != nil {
-				log.Printf("failed to end event: %v", err)
-				break
-			}
+		md := formatEventAsMarkdown(startedEvent, true)
+		md = fmt.Sprintf("*%s*\n%s", "Event has started!", md)
+		if err := bot.Send(noctx, "yell", "markdown", md); err != nil {
+			log.Printf("failed to announce event started: %v", err)
+		}
+	case endEvent:
+		log.Print("ending the event")
 
-			md := formatEventAsMarkdown(endedEvent, true)
-			md = fmt.Sprintf("*%s*\n%s", "Event has ended!", md)
-			if err := bot.Send(noctx, "yell", "markdown", md); err != nil {
-				log.Printf("failed to announce event ended: %v", err)
-			}
-		default:
-			log.Printf("unsupported task to perform: %v", tsk)
+		endedEvent, err := bot.EndCurrentEvent()
+		if err != nil {
+			log.Printf("failed to end event: %v", err)
+			break
+		}
+
+		md := formatEventAsMarkdown(endedEvent, true)
+		md = fmt.Sprintf("*%s*\n%s", "Event has ended!", md)
+		if err := bot.Send(noctx, "yell", "markdown", md); err != nil {
+			log.Printf("failed to announce event ended: %v", err)
+		}
+	default:
+		log.Printf("unsupported task to perform: %v", tsk)
 	}
 }
 
@@ -135,12 +138,12 @@ func (bot *Bot) maintain() {
 			timer.Reset(time.Until(future))
 		}
 		select {
-			case <-timer.C:
-				bot.perform(tsk)
-			case <-bot.rescheduleChan:
-				if !timer.Stop() {
-					<-timer.C
-				}
+		case <-timer.C:
+			bot.perform(tsk)
+		case <-bot.rescheduleChan:
+			if !timer.Stop() {
+				<-timer.C
+			}
 		}
 	}
 }

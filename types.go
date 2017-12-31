@@ -1,12 +1,13 @@
 package skyaway
 
 import (
-	"time"
-	"encoding/json"
+	"bytes"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"strings"
-	"bytes"
+	"time"
+	"strconv"
 )
 
 var nullString = []byte("null")
@@ -21,15 +22,28 @@ func NewDuration(d time.Duration) Duration {
 }
 
 type User struct {
-	ID        int          `json:"id"`
-	UserName  string       `db:"username" json:"username,omitempty"`
-	FirstName string       `db:"first_name" json:"first_name,omitempty"`
-	LastName  string       `db:"last_name" json:"last_name,omitempty"`
-	Enlisted  bool         `json:"enlisted"`
-	Banned    bool         `json:"banned"`
-	Admin     bool         `json:"admin"`
+	ID        int    `json:"id"`
+	UserName  string `db:"username" json:"username,omitempty"`
+	FirstName string `db:"first_name" json:"first_name,omitempty"`
+	LastName  string `db:"last_name" json:"last_name,omitempty"`
+	Enlisted  bool   `json:"enlisted"`
+	Banned    bool   `json:"banned"`
+	Admin     bool   `json:"admin"`
 
-	exists    bool
+	exists bool
+}
+
+type Participant struct {
+	EventID   int      `db:"event_id" json:"event_id"`
+	UserID    int      `db:"user_id" json:"user_id"`
+	UserName  string   `db:"username" json:"username,omitempty"`
+	Coins     int      `db:"coins" json:"coins"`
+	ClaimedAt NullTime `db:"claimed_at" json:"claimed_at,omitempty"`
+}
+
+type TempUser struct {
+	ID       int    `db:"id"`
+	UserName string `db:"username"`
 }
 
 func (u *User) NameAndTags() string {
@@ -41,11 +55,17 @@ func (u *User) NameAndTags() string {
 		tags = append(tags, "admin")
 	}
 
-	if len(tags) > 0 {
-		return fmt.Sprintf("%s (%s)", u.UserName, strings.Join(tags, ", "))
-	} else {
-		return u.UserName
+	// If username is hidden use userid
+	identifier := u.UserName
+	if identifier == "" {
+		identifier = strconv.Itoa(u.ID)
 	}
+
+	if len(tags) > 0 {
+		return fmt.Sprintf("%s (%s)", identifier, strings.Join(tags, ", "))
+	}
+
+	return identifier
 }
 
 func (u *User) Exists() bool {
@@ -59,15 +79,14 @@ type Chat struct {
 }
 
 type Event struct {
-	ID          int          `json:"id"`
-	Duration    Duration     `json:"duration"`
-	ScheduledAt NullTime     `db:"scheduled_at" json:"scheduled_at"`
-	StartedAt   NullTime     `db:"started_at" json:"started_at"`
-	EndedAt     NullTime     `db:"ended_at" json:"ended_at"`
-	Coins       int          `json:"coins"`
-	Surprise    bool         `json:"surpruse"`
+	ID          int      `json:"id"`
+	Duration    Duration `json:"duration"`
+	ScheduledAt NullTime `db:"scheduled_at" json:"scheduled_at"`
+	StartedAt   NullTime `db:"started_at" json:"started_at"`
+	EndedAt     NullTime `db:"ended_at" json:"ended_at"`
+	Coins       int      `json:"coins"`
+	Surprise    bool     `json:"surpruse"`
 }
-
 
 func (d Duration) Value() (driver.Value, error) {
 	if !d.Valid {
@@ -133,9 +152,9 @@ func (n *NullTime) Scan(value interface{}) error {
 	}
 
 	switch v := value.(type) {
-		case time.Time:
-			n.Time, n.Valid = v, true
-			return nil
+	case time.Time:
+		n.Time, n.Valid = v, true
+		return nil
 	}
 
 	n.Valid = false
