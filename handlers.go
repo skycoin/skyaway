@@ -396,7 +396,7 @@ func (bot *Bot) handleCommandListWinners(ctx *Context, command, args string) err
 	var lines []string
 	for i, winner := range winners {
 		lines = append(lines, fmt.Sprintf(
-			"%d. %d: %s", (i+1), winner.UserID, winner.UserName,
+			"%d. %d: %s: coinswon -> %d", (i+1), winner.UserID, winner.UserName, winner.Coins,
 		))
 	}
 	if len(lines) > 0 {
