@@ -1,13 +1,13 @@
 package main
 
 import (
-	"os"
-	"fmt"
 	"encoding/json"
+	"fmt"
 	"log"
+	"os"
 
 	_ "github.com/lib/pq"
-	"github.com/kvap/skyaway"
+	"github.com/therealssj/skyaway"
 )
 
 func loadJsonFromFile(filename string, result interface{}) error {
@@ -51,15 +51,10 @@ func main() {
 	if err := loadJsonFromFile("config.json", &config); err != nil {
 		panic(err)
 	}
-
 	bot, err := skyaway.NewBot(config)
 	if err != nil {
 		panic(err)
 	}
-
-	bot.SetCommandHandler(false, "hello", Hello)
-	bot.SetCommandHandler(true, "goodbye", Goodbye)
-	bot.AddPrivateMessageHandler(Private)
 
 	bot.Start()
 }

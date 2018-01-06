@@ -1,48 +1,32 @@
 package skyaway
 
 import (
-	"log"
-	"fmt"
 	"errors"
+	"fmt"
+	"log"
 	"strings"
 
 	"gopkg.in/telegram-bot-api.v4"
 )
 
 type Bot struct {
-	config *Config
-	db *DB
-	telegram *tgbotapi.BotAPI
-	commandHandlers map[string]CommandHandler
-	adminCommandHandlers map[string]CommandHandler
+	config                 *Config
+	db                     *DB
+	telegram               *tgbotapi.BotAPI
+	commandHandlers        map[string]CommandHandler
+	adminCommandHandlers   map[string]CommandHandler
 	privateMessageHandlers []MessageHandler
-	groupMessageHandlers []MessageHandler
-	rescheduleChan chan int
+	groupMessageHandlers   []MessageHandler
+	rescheduleChan         chan int
 }
 
 type Context struct {
 	message *tgbotapi.Message
-	User *User
+	User    *User
 }
 
 type CommandHandler func(*Bot, *Context, string, string) error
 type MessageHandler func(*Bot, *Context, string) (bool, error)
-
-func (bot *Bot) SetCommandHandler(admin bool, command string, handler CommandHandler) {
-	if admin {
-		bot.adminCommandHandlers[command] = handler
-	} else {
-		bot.commandHandlers[command] = handler
-	}
-}
-
-func (bot *Bot) AddPrivateMessageHandler(handler MessageHandler) {
-	bot.privateMessageHandlers = append(bot.privateMessageHandlers, handler)
-}
-
-func (bot *Bot) AddGroupMessageHandler(handler MessageHandler) {
-	bot.groupMessageHandlers = append(bot.groupMessageHandlers, handler)
-}
 
 var EventExists = errors.New("already have a current event")
 var EventDoesNotExist = errors.New("no current event")
@@ -81,12 +65,15 @@ func (bot *Bot) EndCurrentEvent() (*Event, error) {
 	defer bot.Reschedule()
 
 	switch {
-		case event.StartedAt.Valid:
-			bot.AnnounceEventWithTitle(event, "Event has ended!")
-		case event.ScheduledAt.Valid:
+	case event.StartedAt.Valid:
+		bot.AnnounceEventWithTitle(event, "Event has ended!")
+	case event.ScheduledAt.Valid:
+		// Make a cancel announcement only if it is a public event
+		if !event.Surprise {
 			bot.AnnounceEventWithTitle(event, "The scheduled event has been cancelled")
-		default:
-			log.Printf("the ended event was neither started, nor scheduled")
+		}
+	default:
+		log.Printf("the ended event was neither started, nor scheduled")
 	}
 
 	return event, nil
@@ -131,13 +118,13 @@ func (bot *Bot) EndCurrentEventIfNeeded() (event *Event, ended bool, err error) 
 // Returns the current event and `EventExists` error if there already is a
 // current event (scheduled or started). Returns the new event if started
 // successfully
-func (bot *Bot) StartNewEvent(coins int, dur Duration) (*Event, error) {
+func (bot *Bot) StartNewEvent(coins int, duration Duration) (*Event, error) {
 	event := bot.db.GetCurrentEvent()
 	if event != nil {
 		return event, EventExists
 	}
 
-	err := bot.db.StartNewEvent(coins, bot.config.EventDuration)
+	err := bot.db.StartNewEvent(coins, duration)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start event: %v", err)
 	}
@@ -189,10 +176,10 @@ func (bot *Bot) handleForwardedMessageFrom(ctx *Context, id int) error {
 	dbuser := bot.db.GetUser(user.ID)
 	if dbuser == nil {
 		dbuser = &User{
-			ID: user.ID,
-			UserName: user.UserName,
+			ID:        user.ID,
+			UserName:  user.UserName,
 			FirstName: user.FirstName,
-			LastName: user.LastName,
+			LastName:  user.LastName,
 		}
 	}
 
@@ -260,10 +247,10 @@ func (bot *Bot) handleUserJoin(ctx *Context, user *tgbotapi.User) error {
 	dbuser := bot.db.GetUser(user.ID)
 	if dbuser == nil {
 		dbuser = &User{
-			ID: user.ID,
-			UserName: user.UserName,
+			ID:        user.ID,
+			UserName:  user.UserName,
 			FirstName: user.FirstName,
-			LastName: user.LastName,
+			LastName:  user.LastName,
 		}
 	}
 	dbuser.Enlisted = true
@@ -298,7 +285,7 @@ func (bot *Bot) removeMyName(text string) (string, bool) {
 	var removed bool
 	var words []string
 	for _, word := range strings.Fields(text) {
-		if word == "@" + bot.telegram.Self.UserName {
+		if word == "@"+bot.telegram.Self.UserName {
 			removed = true
 			continue
 		}
@@ -320,9 +307,11 @@ func (bot *Bot) isReplyToMe(ctx *Context) bool {
 
 func (bot *Bot) handleGroupMessage(ctx *Context) error {
 	var gerr error
-	if u := ctx.message.NewChatMember; u != nil {
-		if err := bot.handleUserJoin(ctx, u); err != nil {
-			gerr = err
+	if u := ctx.message.NewChatMembers; u != nil {
+		for _, user := range *u {
+			if err := bot.handleUserJoin(ctx, &user); err != nil {
+				gerr = err
+			}
 		}
 	}
 	if u := ctx.message.LeftChatMember; u != nil {
@@ -353,25 +342,25 @@ func (bot *Bot) handleGroupMessage(ctx *Context) error {
 func (bot *Bot) Send(ctx *Context, mode, format, text string) error {
 	var msg tgbotapi.MessageConfig
 	switch mode {
-		case "whisper":
-			msg = tgbotapi.NewMessage(int64(ctx.message.From.ID), text)
-		case "reply":
-			msg = tgbotapi.NewMessage(ctx.message.Chat.ID, text)
-			msg.ReplyToMessageID = ctx.message.MessageID
-		case "yell":
-			msg = tgbotapi.NewMessage(bot.config.ChatID, text)
-		default:
-			return fmt.Errorf("unsupported message mode: %s", mode)
+	case "whisper":
+		msg = tgbotapi.NewMessage(int64(ctx.message.From.ID), text)
+	case "reply":
+		msg = tgbotapi.NewMessage(ctx.message.Chat.ID, text)
+		msg.ReplyToMessageID = ctx.message.MessageID
+	case "yell":
+		msg = tgbotapi.NewMessage(bot.config.ChatID, text)
+	default:
+		return fmt.Errorf("unsupported message mode: %s", mode)
 	}
 	switch format {
-		case "markdown":
-			msg.ParseMode = "Markdown"
-		case "html":
-			msg.ParseMode = "HTML"
-		case "text":
-			msg.ParseMode = ""
-		default:
-			return fmt.Errorf("unsupported message format: %s", format)
+	case "markdown":
+		msg.ParseMode = "Markdown"
+	case "html":
+		msg.ParseMode = "HTML"
+	case "text":
+		msg.ParseMode = ""
+	default:
+		return fmt.Errorf("unsupported message format: %s", format)
 	}
 	_, err := bot.telegram.Send(msg)
 	return err
@@ -388,7 +377,7 @@ func (bot *Bot) Ask(ctx *Context, text string) error {
 	msg := tgbotapi.NewMessage(ctx.message.Chat.ID, text)
 	msg.ReplyMarkup = tgbotapi.ForceReply{
 		ForceReply: true,
-		Selective: true,
+		Selective:  true,
 	}
 	msg.ReplyToMessageID = ctx.message.MessageID
 	_, err := bot.telegram.Send(msg)
@@ -400,7 +389,7 @@ func (bot *Bot) Reply(ctx *Context, text string) error {
 }
 
 func (bot *Bot) handleMessage(ctx *Context) error {
-	if ctx.message.Chat.IsGroup() && ctx.message.Chat.ID == bot.config.ChatID {
+	if (ctx.message.Chat.IsGroup() || ctx.message.Chat.IsSuperGroup()) && ctx.message.Chat.ID == bot.config.ChatID {
 		return bot.handleGroupMessage(ctx)
 	} else if ctx.message.Chat.IsPrivate() {
 		return bot.handlePrivateMessage(ctx)
@@ -412,8 +401,8 @@ func (bot *Bot) handleMessage(ctx *Context) error {
 
 func NewBot(config Config) (*Bot, error) {
 	var bot = Bot{
-		config: &config,
-		commandHandlers: make(map[string]CommandHandler),
+		config:               &config,
+		commandHandlers:      make(map[string]CommandHandler),
 		adminCommandHandlers: make(map[string]CommandHandler),
 	}
 	var err error
@@ -432,14 +421,14 @@ func NewBot(config Config) (*Bot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get chat info from telegram: %v", err)
 	}
-	if !chat.IsGroup() {
-		return nil, fmt.Errorf("only group chats supported")
+	if !chat.IsGroup() && !chat.IsSuperGroup() {
+		return nil, fmt.Errorf("only group and supergroups are supported")
 	}
 
 	log.Printf("user: %d %s", bot.telegram.Self.ID, bot.telegram.Self.UserName)
 	log.Printf("chat: %s %d %s", chat.Type, chat.ID, chat.Title)
 
-	bot.setBuiltInCommandHandlers()
+	bot.setCommandHandlers()
 
 	return &bot, nil
 }
@@ -457,10 +446,10 @@ func (bot *Bot) handleUpdate(update *tgbotapi.Update) error {
 			log.Printf("message from untracked user: %s, adding to db", u.String())
 
 			dbuser = &User{
-				ID: u.ID,
-				UserName: u.UserName,
+				ID:        u.ID,
+				UserName:  u.UserName,
 				FirstName: u.FirstName,
-				LastName: u.LastName,
+				LastName:  u.LastName,
 			}
 			if err := bot.db.PutUser(dbuser); err != nil {
 				return fmt.Errorf("failed to save the user: %v", err)
